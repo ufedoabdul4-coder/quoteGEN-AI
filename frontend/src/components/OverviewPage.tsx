@@ -6,6 +6,8 @@ import { openAuthenticatedAsset } from '../services/api';
 interface Props {
   documents: DocumentSummary[];
   billingStatus: BillingStatus | null;
+  billingLoadError: string;
+  onRetryBilling: () => void;
   templateCount: number | null;
   onCreate: () => void;
   onOpenDocuments: () => void;
@@ -13,7 +15,8 @@ interface Props {
 }
 
 export function OverviewPage({
-  documents, billingStatus, templateCount, onCreate, onOpenDocuments, onOpenTemplates,
+  documents, billingStatus, billingLoadError, onRetryBilling, templateCount,
+  onCreate, onOpenDocuments, onOpenTemplates,
 }: Props) {
   const [error, setError] = useState('');
   const recent = documents.slice(0, 5);
@@ -41,7 +44,7 @@ export function OverviewPage({
       </header>
       {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
 
-      <UsageCard status={billingStatus} />
+      <UsageCard status={billingStatus} error={billingLoadError} onRetry={onRetryBilling} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <StatCard icon={FileText} label="Documents" value={documents.length}
@@ -87,11 +90,14 @@ export function OverviewPage({
   );
 }
 
-function UsageCard({ status }: { status: BillingStatus | null }) {
+function UsageCard({
+  status, error, onRetry,
+}: { status: BillingStatus | null; error: string; onRetry: () => void }) {
   if (!status) {
     return (
-      <section className="card p-4 text-sm text-[var(--text-muted)]" aria-label="PDF generation usage">
-        Loading PDF generation usage…
+      <section className="card flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-[var(--text-muted)]" aria-label="PDF generation usage">
+        <span>{error || 'Loading PDF generation usage…'}</span>
+        {error && <button type="button" className="btn" onClick={onRetry}>Retry</button>}
       </section>
     );
   }

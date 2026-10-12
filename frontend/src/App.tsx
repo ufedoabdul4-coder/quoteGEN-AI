@@ -46,6 +46,7 @@ export default function App() {
   const [profile, setProfile] = useState<BusinessProfile>(EMPTY_PROFILE);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
+  const [billingLoadError, setBillingLoadError] = useState('');
   const [templates, setTemplates] = useState<TemplateMeta[]>([]);
   const [templatesLoaded, setTemplatesLoaded] = useState(false);
   const [templateLoadError, setTemplateLoadError] = useState('');
@@ -84,11 +85,15 @@ export default function App() {
   };
 
   const loadBillingStatus = async () => {
+    setBillingLoadError('');
     try {
       setBillingStatus(await api.billingStatus());
     } catch (error) {
       console.error('Unable to load quotation usage.', error);
       setBillingStatus(null);
+      setBillingLoadError(
+        'Usage is unavailable. If you have not applied the latest Supabase schema, run it and retry.',
+      );
     }
   };
 
@@ -142,6 +147,7 @@ export default function App() {
     setActiveTemplate(null);
     setActiveDocument(null);
     setBillingStatus(null);
+    setBillingLoadError('');
 
     (async () => {
       try {
@@ -306,6 +312,8 @@ export default function App() {
             <OverviewPage
               documents={documents}
               billingStatus={billingStatus}
+              billingLoadError={billingLoadError}
+              onRetryBilling={() => { void loadBillingStatus(); }}
               templateCount={templatesLoaded ? templates.length : null}
               onCreate={openCreate}
               onOpenDocuments={() => setRoute('documents')}
