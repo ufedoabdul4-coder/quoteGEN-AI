@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 
 import pymupdf
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 load_dotenv()
 
@@ -34,6 +35,8 @@ from models import (  # noqa: E402
     UnderstandResponse,
 )
 from services import ai, pipeline, reference, store  # noqa: E402
+from services import supabase_client  # noqa: E402
+from services.context import reset_current_user, set_current_user  # noqa: E402
 from services.designs import list_designs, to_design_info  # noqa: E402
 
 app = FastAPI(
@@ -42,13 +45,57 @@ app = FastAPI(
     version="2.0.0",
 )
 
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+#: Routes that stay open even once authentication is switched on.
+_PUBLIC_PATHS = {"/health", "/designs"}
+
+
+@app.middleware("http")
+async def authenticate(request: Request, call_next):
+    """Resolve the caller and scope storage to them for the whole request.
+
+    With Supabase configured, every non-public route needs a valid
+    ``Authorization: Bearer <access_token>`` header. Without Supabase (local
+    development) everything runs as a single ``local`` user so the app still
+    works offline.
+    """
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    if not supabase_client.is_enabled():
+        token = set_current_user("local")
+        try:
+            return await call_next(request)
+        finally:
+            reset_current_user(token)
+
+    if request.url.path in _PUBLIC_PATHS:
+        token = set_current_user(None)
+        try:
+            return await call_next(request)
+        finally:
+            reset_current_user(token)
+
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith("bearer "):
+        return JSONResponse(status_code=401, content={"detail": "Authentication required."})
+    user_id = supabase_client.verify_token(header[7:].strip())
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Invalid or expired session."})
+    token = set_current_user(user_id)
+    try:
+        return await call_next(request)
+    finally:
+        reset_current_user(token)
 
 
 # -- health & designs --------------------------------------------------------

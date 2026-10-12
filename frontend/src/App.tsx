@@ -13,6 +13,8 @@ import { DocumentsPage } from './components/DocumentsPage';
 import { CreateQuotation } from './components/CreateQuotation';
 import { ProfilePage } from './components/ProfilePage';
 import { MasterTemplatePage } from './components/MasterTemplatePage';
+import { LoginPage } from './components/LoginPage';
+import { useAuth } from './services/auth';
 
 const EMPTY_PROFILE: BusinessProfile = {
   name: '', phone: '', email: '', website: '', address: '', logo_data_url: null,
@@ -27,6 +29,7 @@ const MOBILE_NAV: { id: Route; label: string; icon: typeof LayoutDashboard }[] =
 ];
 
 export default function App() {
+  const { configured, ready, session, email, signOut } = useAuth();
   const [route, setRoute] = useState<Route>('overview');
   const [online, setOnline] = useState<boolean | null>(null);
   const [profile, setProfile] = useState<BusinessProfile>(EMPTY_PROFILE);
@@ -34,6 +37,16 @@ export default function App() {
   const [templates, setTemplates] = useState<TemplateMeta[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<TemplateMeta | null>(null);
   const [activeDocument, setActiveDocument] = useState<DocumentRecord | null>(null);
+  const [signOutError, setSignOutError] = useState('');
+
+  const handleSignOut = async () => {
+    setSignOutError('');
+    try {
+      await signOut();
+    } catch (error) {
+      setSignOutError(error instanceof Error ? error.message : 'Unable to sign out.');
+    }
+  };
 
   const loadDocuments = async () => {
     try {
@@ -57,6 +70,15 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!ready || (configured && !session)) return;
+
+    setRoute('overview');
+    setProfile(EMPTY_PROFILE);
+    setDocuments([]);
+    setTemplates([]);
+    setActiveTemplate(null);
+    setActiveDocument(null);
+
     (async () => {
       try {
         await api.health();
@@ -72,7 +94,16 @@ export default function App() {
       }
       await Promise.all([loadDocuments(), loadTemplates()]);
     })();
-  }, []);
+  }, [ready, configured, session?.user.id]);
+
+  if (!ready) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm text-[var(--text-muted)]">
+        Restoring your session…
+      </div>
+    );
+  }
+  if (configured && !session) return <LoginPage />;
 
   const openCreate = () => {
     setActiveDocument(null);
@@ -98,7 +129,8 @@ export default function App() {
   return (
     <div className="flex min-h-screen bg-[var(--bg)]">
       <Sidebar active={route} onNavigate={setRoute} online={online}
-        documentCount={documents.length} templateCount={templates.length} />
+        documentCount={documents.length} templateCount={templates.length}
+        email={email} onSignOut={() => { void handleSignOut(); }} />
 
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="md:hidden sticky top-0 z-20 bg-[var(--surface)] border-b border-[var(--border)]">
@@ -107,7 +139,14 @@ export default function App() {
               <span className="font-semibold">quoteGEN</span>
               <span className="chip chip-gold">AI</span>
             </div>
-            <StatusRow online={online} />
+            <div className="flex items-center gap-2">
+              <StatusRow online={online} />
+              {configured && (
+                <button type="button" className="btn btn-ghost text-xs" onClick={() => { void handleSignOut(); }}>
+                  Sign out
+                </button>
+              )}
+            </div>
           </div>
           <nav className="flex gap-1 px-2 pb-2 overflow-x-auto">
             {MOBILE_NAV.map((item) => {
@@ -125,6 +164,11 @@ export default function App() {
         </header>
 
         <main className="flex-1 min-w-0 p-4 sm:p-6">
+          {signOutError && (
+            <p role="alert" className="mb-4 text-sm text-[var(--danger,#c0392b)]">
+              {signOutError}
+            </p>
+          )}
           {route === 'overview' && (
             <OverviewPage
               documents={documents}

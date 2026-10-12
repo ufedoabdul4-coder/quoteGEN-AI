@@ -26,9 +26,13 @@ interface Props {
   online: boolean | null;
   documentCount: number;
   templateCount: number;
+  email: string | null;
+  onSignOut: () => void;
 }
 
-export function Sidebar({ active, onNavigate, online, documentCount, templateCount }: Props) {
+export function Sidebar({
+  active, onNavigate, online, documentCount, templateCount, email, onSignOut,
+}: Props) {
   return (
     <aside className="hidden md:flex md:flex-col w-64 shrink-0 h-screen sticky top-0 border-r border-[var(--border)] bg-[var(--surface)]">
       <div className="px-5 py-5 border-b border-[var(--border)]">
@@ -67,6 +71,14 @@ export function Sidebar({ active, onNavigate, online, documentCount, templateCou
         <StatusRow online={online} />
         <div className="text-xs text-[var(--text-dim)]">{documentCount} document(s)</div>
         <div className="text-xs text-[var(--text-dim)]">{templateCount} template(s)</div>
+        {email && (
+          <div className="flex items-center justify-between gap-2 pt-2">
+            <span className="text-xs text-[var(--text-dim)] truncate">{email}</span>
+            <button type="button" className="btn btn-ghost text-xs" onClick={onSignOut}>
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

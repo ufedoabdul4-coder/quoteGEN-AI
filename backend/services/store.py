@@ -339,3 +339,56 @@ def save_profile(profile: BusinessProfile) -> BusinessProfile:
     _ensure_dirs()
     _write_atomic(PROFILE_FILE, profile.model_dump_json(indent=2).encode("utf-8"))
     return profile
+
+
+# ---------------------------------------------------------------------------
+# backend selection
+# ---------------------------------------------------------------------------
+#
+# When Supabase credentials are present the whole module is transparently
+# rebound to the Supabase implementation so the rest of the app keeps calling
+# ``store.*`` unchanged. Without credentials the local file backend above is
+# used, which is what development and the test-suite rely on.
+
+
+from services import supabase_client  # noqa: E402
+
+_SUPABASE_FUNCTIONS = (
+    "save_document",
+    "save_record",
+    "get_document",
+    "list_documents",
+    "delete_document",
+    "save_pdf",
+    "save_previews",
+    "read_pdf",
+    "read_preview",
+    "save_reference",
+    "read_reference",
+    "save_reference_meta",
+    "get_reference_meta",
+    "list_references",
+    "delete_reference",
+    "save_template_meta",
+    "get_template",
+    "list_templates",
+    "rename_template",
+    "delete_template",
+    "load_settings",
+    "save_settings",
+    "get_active_template_id",
+    "set_active_template_id",
+    "load_profile",
+    "save_profile",
+)
+
+
+def using_supabase() -> bool:
+    return supabase_client.is_enabled()
+
+
+if using_supabase():
+    from services import supabase_store as _supabase_store
+
+    for _name in _SUPABASE_FUNCTIONS:
+        globals()[_name] = getattr(_supabase_store, _name)

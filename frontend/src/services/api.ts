@@ -11,13 +11,31 @@ import type {
   TemplateMeta,
   UnderstandResponse,
 } from '../types';
+import { supabase } from './supabase';
 
 // The Vite dev proxy forwards `/api/*` to the FastAPI backend (stripping the
 // prefix), so every call and asset URL goes through one base path.
-const API = '/api';
+const API = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '');
+
+async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (supabase) {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw new Error(error.message);
+    if (data.session?.access_token) {
+      headers.set('Authorization', `Bearer ${data.session.access_token}`);
+    }
+  }
+
+  const response = await fetch(`${API}${path}`, { ...init, headers });
+  if (response.status === 401 && supabase) {
+    window.dispatchEvent(new Event('quotegen:unauthorized'));
+  }
+  return response;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, init);
+  const response = await apiFetch(path, init);
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
     throw new Error((detail as { detail?: string }).detail || `Request failed (${response.status})`);
@@ -66,7 +84,7 @@ export const api = {
   uploadReference: async (file: File): Promise<ReferenceMeta> => {
     const form = new FormData();
     form.append('file', file);
-    const response = await fetch(`${API}/references/upload`, { method: 'POST', body: form });
+    const response = await apiFetch('/references/upload', { method: 'POST', body: form });
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
       throw new Error((detail as { detail?: string }).detail || 'Upload failed');
@@ -85,7 +103,7 @@ export const api = {
   uploadTemplate: async (file: File): Promise<TemplateMeta> => {
     const form = new FormData();
     form.append('file', file);
-    const response = await fetch(`${API}/templates/upload`, { method: 'POST', body: form });
+    const response = await apiFetch('/templates/upload', { method: 'POST', body: form });
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
       throw new Error((detail as { detail?: string }).detail || 'Upload failed');
@@ -96,7 +114,7 @@ export const api = {
   replaceTemplate: async (id: string, file: File): Promise<TemplateMeta> => {
     const form = new FormData();
     form.append('file', file);
-    const response = await fetch(`${API}/templates/${id}/replace`, {
+    const response = await apiFetch(`/templates/${id}/replace`, {
       method: 'PUT', body: form,
     });
     if (!response.ok) {
