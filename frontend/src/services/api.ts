@@ -1,5 +1,6 @@
 import type {
   BusinessProfile,
+  BillingStatus,
   ClientInfo,
   DesignInfo,
   DocumentSummary,
@@ -38,9 +39,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await apiFetch(path, init);
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
-    throw new Error((detail as { detail?: string }).detail || `Request failed (${response.status})`);
+    const message = (detail as {
+      detail?: string | {
+        code?: string;
+        message?: string;
+        monthly_price_ngn?: number;
+      };
+    }).detail;
+    throw new ApiError(
+      typeof message === 'string'
+        ? message
+        : message?.message || `Request failed (${response.status})`,
+      response.status,
+      message,
+    );
   }
   return response.json() as Promise<T>;
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly detail?: string | {
+      code?: string;
+      message?: string;
+      monthly_price_ngn?: number;
+    },
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
 }
 
 const json = (body: unknown): RequestInit => ({
@@ -68,6 +97,17 @@ export const api = {
 
   generate: (payload: GenerateRequest) =>
     request<GenerateResponse>('/generate', json(payload)),
+
+  billingStatus: () => request<BillingStatus>('/billing/status'),
+
+  billingCheckout: (email: string, name: string) =>
+    request<{ checkout_url: string }>('/billing/checkout', json({ email, name })),
+
+  verifyPayment: (transactionId: string, txRef: string) =>
+    request<BillingStatus>('/billing/verify', json({
+      transaction_id: transactionId,
+      tx_ref: txRef,
+    })),
 
   documents: () =>
     request<{ documents: DocumentSummary[] }>('/documents').then((r) => r.documents),

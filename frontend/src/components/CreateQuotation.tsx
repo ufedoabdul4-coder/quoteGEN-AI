@@ -6,8 +6,9 @@ import type {
   BusinessProfile, ClientInfo, DocumentRecord, GenerateRequest, TemplateMeta,
   Understanding,
 } from '../types';
-import { api, assetUrl } from '../services/api';
+import { api, ApiError, assetUrl } from '../services/api';
 import { PreviewPane } from './PreviewPane';
+import { useAuth } from '../services/auth';
 
 const SAMPLE = `Quotation for Acme Facilities Ltd
 Prepared for: Acme Facilities Ltd
@@ -59,6 +60,7 @@ function buildPayload(
 export function CreateQuotation({
   profile, activeTemplate, onManageTemplates, onSaved, initialDocument,
 }: Props) {
+  const { email, session } = useAuth();
   const [text, setText] = useState(initialDocument?.raw_input || '');
   const client: ClientInfo = initialDocument?.client
     ?? { name: '', email: '', phone: '', address: '' };
@@ -72,6 +74,9 @@ export function CreateQuotation({
   const [pdfUrl, setPdfUrl] = useState(initialDocument?.pdf_url || '');
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
+  const [quotaExhausted, setQuotaExhausted] = useState(false);
+  const [monthlyPrice, setMonthlyPrice] = useState<number | null>(null);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [engine, setEngine] = useState<{ usedAi: boolean; model: string } | null>(null);
 
   const generateQuotation = async () => {
@@ -97,9 +102,37 @@ export function CreateQuotation({
       setPages(response.preview_urls.map((url) => assetUrl(url)));
       onSaved();
     } catch (e) {
-      setError((e as Error).message);
+      if (e instanceof ApiError && e.status === 402) {
+        setQuotaExhausted(true);
+        if (typeof e.detail === 'object' && e.detail?.monthly_price_ngn) {
+          setMonthlyPrice(e.detail.monthly_price_ngn);
+        }
+        setError('');
+      } else {
+        setError((e as Error).message);
+      }
     } finally {
       setBusy(null);
+    }
+  };
+
+  const startMonthlyCheckout = async () => {
+    if (!email) {
+      setError('Could not identify your signed-in email. Please sign in again.');
+      return;
+    }
+    setCheckoutBusy(true);
+    setError('');
+    try {
+      const fullName = session?.user.user_metadata?.full_name;
+      const result = await api.billingCheckout(
+        email,
+        typeof fullName === 'string' ? fullName : '',
+      );
+      window.location.assign(result.checkout_url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Unable to start payment.');
+      setCheckoutBusy(false);
     }
   };
 
@@ -141,6 +174,31 @@ export function CreateQuotation({
             </div>
           )}
 
+          {quotaExhausted && (
+            <div className="panel p-4 space-y-3" role="status">
+              <div>
+                <h2 className="font-semibold">You’ve used your 10 free quotations</h2>
+                <p className="text-sm text-[var(--text-muted)] mt-1">
+                  Get unlimited quotations for one month for{' '}
+                  {monthlyPrice === null ? '₦13,310' : `₦${monthlyPrice.toLocaleString('en-NG')}`}.
+                  This is a one-time monthly payment; it does not auto-renew.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => { void startMonthlyCheckout(); }}
+                disabled={checkoutBusy}
+              >
+                {checkoutBusy
+                  ? <LoaderCircle size={15} className="spin" />
+                  : <Sparkles size={15} />}
+                Continue to Flutterwave
+              </button>
+              {error && <p role="alert" className="text-xs text-[var(--error)]">{error}</p>}
+            </div>
+          )}
+
           <div className="space-y-2">
               <textarea
                 className="textarea"
@@ -151,7 +209,7 @@ export function CreateQuotation({
               />
               <div className="flex items-center gap-2">
                 <button type="button" className="btn btn-primary" onClick={() => void generateQuotation()}
-                  disabled={(!text.trim() && !understanding) || Boolean(busy) || !activeTemplate}>
+                  disabled={quotaExhausted || (!text.trim() && !understanding) || Boolean(busy) || !activeTemplate}>
                   {busy
                     ? <LoaderCircle size={15} className="spin" />
                     : <Sparkles size={15} />}

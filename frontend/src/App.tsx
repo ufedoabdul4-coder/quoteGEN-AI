@@ -14,10 +14,11 @@ import { CreateQuotation } from './components/CreateQuotation';
 import { ProfilePage } from './components/ProfilePage';
 import { MasterTemplatePage } from './components/MasterTemplatePage';
 import { LoginPage } from './components/LoginPage';
+import { PaymentReturnPage } from './components/PaymentReturnPage';
 import { useAuth } from './services/auth';
 
 const EMPTY_PROFILE: BusinessProfile = {
-  name: '', phone: '', email: '', website: '', address: '', logo_data_url: null,
+  name: '', business_type: '', phone: '', email: '', website: '', address: '', logo_data_url: null,
 };
 
 const MOBILE_NAV: { id: Route; label: string; icon: typeof LayoutDashboard }[] = [
@@ -31,6 +32,14 @@ const MOBILE_NAV: { id: Route; label: string; icon: typeof LayoutDashboard }[] =
 export default function App() {
   const { configured, ready, session, email, signOut } = useAuth();
   const userId = session?.user.id;
+  const [confirmedEmail, setConfirmedEmail] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('confirmed') !== '1') return null;
+    return params.get('email') || '';
+  });
+  const [paymentReturn, setPaymentReturn] = useState(
+    () => new URLSearchParams(window.location.search).get('payment') === 'complete',
+  );
   const [route, setRoute] = useState<Route>('overview');
   const [online, setOnline] = useState<boolean | null>(null);
   const [healthAttempt, setHealthAttempt] = useState(0);
@@ -47,6 +56,19 @@ export default function App() {
       await signOut();
     } catch (error) {
       setSignOutError(error instanceof Error ? error.message : 'Unable to sign out.');
+    }
+  };
+
+  const continueToSignIn = async () => {
+    setSignOutError('');
+    try {
+      if (session) await signOut();
+      const loginUrl = new URL('/', window.location.origin);
+      if (confirmedEmail) loginUrl.searchParams.set('email', confirmedEmail);
+      window.history.replaceState(null, '', `${loginUrl.pathname}${loginUrl.search}`);
+      setConfirmedEmail(null);
+    } catch (error) {
+      setSignOutError(error instanceof Error ? error.message : 'Unable to continue to sign in.');
     }
   };
 
@@ -109,7 +131,44 @@ export default function App() {
       </div>
     );
   }
-  if (configured && !session) return <LoginPage />;
+  if (confirmedEmail !== null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-[var(--bg)]">
+        <div className="card w-full max-w-sm text-center">
+          <div className="flex items-center justify-center gap-2 mb-4">
+            <span className="font-semibold text-lg">quoteGEN</span>
+            <span className="chip chip-gold">AI</span>
+          </div>
+          <h1 className="text-lg font-semibold mb-2">Thanks for registering!</h1>
+          <p className="text-sm text-[var(--text-muted)] mb-5">
+            Your email is confirmed. Continue to sign in to your quoteGEN account.
+          </p>
+          {signOutError && (
+            <p role="alert" className="text-sm text-[var(--danger,#c0392b)] mb-3">
+              {signOutError}
+            </p>
+          )}
+          <button type="button" className="btn btn-primary w-full" onClick={() => { void continueToSignIn(); }}>
+            Go to sign in
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (configured && !session) {
+    const initialEmail = new URLSearchParams(window.location.search).get('email') || '';
+    return <LoginPage initialEmail={initialEmail} />;
+  }
+  if (paymentReturn) {
+    return (
+      <PaymentReturnPage
+        onContinue={() => {
+          window.history.replaceState(null, '', '/');
+          setPaymentReturn(false);
+        }}
+      />
+    );
+  }
   if (configured && online !== true) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-6 text-center">

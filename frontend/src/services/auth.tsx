@@ -11,7 +11,7 @@ type AuthContextValue = {
   session: Session | null;
   email: string | null;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<{ needsConfirmation: boolean }>;
+  signUp: (name: string, email: string, password: string) => Promise<{ needsConfirmation: boolean }>;
   signOut: () => Promise<void>;
 };
 
@@ -63,13 +63,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { error } = await client.auth.signInWithPassword({ email, password });
       if (error) throw new Error(error.message);
     },
-    signUp: async (email, password) => {
+    signUp: async (name, email, password) => {
       const client = supabase;
       if (!client) throw new Error('Accounts are not enabled.');
+      const confirmationRedirect = new URL('/', window.location.origin);
+      confirmationRedirect.searchParams.set('confirmed', '1');
+      confirmationRedirect.searchParams.set('email', email);
       const { data, error } = await client.auth.signUp({
         email,
         password,
-        options: { emailRedirectTo: window.location.origin },
+        options: {
+          data: { full_name: name.trim() },
+          emailRedirectTo: confirmationRedirect.toString(),
+        },
       });
       if (error) throw new Error(error.message);
       return { needsConfirmation: !data.session };

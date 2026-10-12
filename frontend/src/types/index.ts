@@ -34,6 +34,7 @@ export interface Understanding {
 
 export interface BusinessProfile {
   name: string;
+  business_type: string;
   phone: string;
   email: string;
   website: string;
@@ -112,6 +113,16 @@ export interface GenerateResponse {
   preview_urls: string[];
   validation: ValidationReport;
   warnings: string[];
+}
+
+export interface BillingStatus {
+  free_limit: number;
+  free_used: number;
+  free_remaining: number;
+  paid_until: string | null;
+  monthly_plan_active: boolean;
+  monthly_price_ngn: number;
+  billing_enabled: boolean;
 }
 
 export interface DocumentSummary {

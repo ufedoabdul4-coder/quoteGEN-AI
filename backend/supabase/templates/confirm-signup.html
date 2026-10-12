@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Confirm your quoteGEN account</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f5f3ee;font-family:Arial,Helvetica,sans-serif;color:#242424;">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f5f3ee;padding:36px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:560px;background:#ffffff;border:1px solid #e7e2d8;border-radius:12px;overflow:hidden;">
+            <tr>
+              <td style="padding:26px 32px;border-bottom:1px solid #eee9df;">
+                <span style="font-size:22px;font-weight:700;letter-spacing:-0.4px;color:#242424;">quoteGEN</span>
+                <span style="margin-left:7px;padding:4px 7px;border-radius:5px;background:#f4ead5;color:#8c6b2f;font-size:11px;font-weight:700;">AI</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;">
+                <h1 style="margin:0 0 14px;font-size:24px;line-height:1.3;color:#242424;">Confirm your email</h1>
+                <p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#5d5a54;">
+                  Thanks for creating a quoteGEN account. Confirm your email address to finish setting up your account.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="border-radius:7px;background:#242424;">
+                      <a href="{{ .ConfirmationURL }}" style="display:inline-block;padding:13px 21px;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;">Confirm email address</a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:24px 0 0;font-size:12px;line-height:1.6;color:#77736b;">
+                  If the button doesn’t work, copy and paste this link into your browser:<br>
+                  <a href="{{ .ConfirmationURL }}" style="color:#8c6b2f;word-break:break-all;">{{ .ConfirmationURL }}</a>
+                </p>
+                <p style="margin:20px 0 0;font-size:12px;line-height:1.6;color:#77736b;">
+                  If you didn’t create a quoteGEN account, you can ignore this email.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 32px;background:#faf9f6;border-top:1px solid #eee9df;font-size:11px;line-height:1.5;color:#89857c;">
+                quoteGEN AI · Create clear, professional quotations for your business.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

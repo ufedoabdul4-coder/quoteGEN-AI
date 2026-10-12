@@ -47,6 +47,35 @@ class ApiTests(unittest.TestCase):
     def test_health(self):
         self.assertEqual(self.client.get("/health").json()["status"], "ok")
 
+    def test_billing_status_in_local_mode(self):
+        response = self.client.get("/billing/status")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["free_limit"], 10)
+        self.assertFalse(response.json()["billing_enabled"])
+
+    def test_generation_blocks_when_quota_rpc_denies(self):
+        understanding = self.client.post(
+            "/understand", json={"text": SAMPLE}
+        ).json()["understanding"]
+        with (
+            mock.patch.object(main.supabase_client, "is_enabled", return_value=True),
+            mock.patch.object(main.supabase_client, "verify_token", return_value="test-user"),
+            mock.patch.object(main.billing, "consume_quotation", return_value=False),
+        ):
+            response = self.client.post(
+                "/generate",
+                headers={"Authorization": "Bearer test-token"},
+                json={
+                    "title": "Quota test quotation",
+                    "design_id": "clean_corporate",
+                    "understanding": understanding,
+                    "profile": {"name": "Bright Works Ltd"},
+                    "client": {"name": "Acme Ltd"},
+                },
+            )
+        self.assertEqual(response.status_code, 402)
+        self.assertEqual(response.json()["detail"]["code"], "FREE_QUOTATIONS_EXHAUSTED")
+
     def test_designs_listed(self):
         designs = self.client.get("/designs").json()["designs"]
         self.assertGreaterEqual(len(designs), 4)

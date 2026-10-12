@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../services/auth';
 
-export function LoginPage() {
+export function LoginPage({ initialEmail = '' }: { initialEmail?: string }) {
   const { signIn, signUp } = useAuth();
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
-  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -19,7 +20,7 @@ export function LoginPage() {
       if (mode === 'signin') {
         await signIn(email.trim(), password);
       } else {
-        const { needsConfirmation } = await signUp(email.trim(), password);
+        const { needsConfirmation } = await signUp(name.trim(), email.trim(), password);
         if (needsConfirmation) {
           setNotice('Check your inbox to confirm your email, then sign in.');
         }
@@ -43,6 +44,21 @@ export function LoginPage() {
         </p>
 
         <form onSubmit={submit} className="flex flex-col gap-3">
+          {mode === 'signup' && (
+            <label className="flex flex-col gap-1">
+              <span className="label">Full name</span>
+              <input
+                className="input"
+                type="text"
+                autoComplete="name"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Your name"
+              />
+            </label>
+          )}
+
           <label className="flex flex-col gap-1">
             <span className="label">Email</span>
             <input

@@ -245,6 +245,7 @@ class ClientInfo(BaseModel):
 
 class BusinessProfile(BaseModel):
     name: str = ""
+    business_type: str = ""
     tagline: str = ""
     email: str = ""
     phone: str = ""

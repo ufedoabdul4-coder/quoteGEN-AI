@@ -9,6 +9,7 @@ and the engine testable without a server.
 from __future__ import annotations
 
 import base64
+import hmac
 import logging
 import os
 
@@ -17,6 +18,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -36,7 +38,8 @@ from models import (  # noqa: E402
 )
 from services import ai, pipeline, reference, store  # noqa: E402
 from services import supabase_client  # noqa: E402
-from services.context import reset_current_user, set_current_user  # noqa: E402
+from services import billing  # noqa: E402
+from services.context import require_current_user, reset_current_user, set_current_user  # noqa: E402
 from services.designs import list_designs, to_design_info  # noqa: E402
 
 app = FastAPI(
@@ -56,7 +59,17 @@ app.add_middleware(
 )
 
 #: Routes that stay open even once authentication is switched on.
-_PUBLIC_PATHS = {"/health", "/designs"}
+_PUBLIC_PATHS = {"/health", "/designs", "/billing/flutterwave/webhook"}
+
+
+class CheckoutRequest(BaseModel):
+    email: str
+    name: str = ""
+
+
+class PaymentVerificationRequest(BaseModel):
+    transaction_id: str
+    tx_ref: str
 
 
 @app.middleware("http")
@@ -214,9 +227,21 @@ def preview(req: GenerateRequest):
 
 @app.post("/generate")
 def generate(req: GenerateRequest):
+    document_id = req.document_id or store.new_id("doc")
+    existing_document = bool(req.document_id and store.get_document(document_id))
     result, report, previews = _render(req)
 
-    document_id = req.document_id or store.new_id("doc")
+    if supabase_client.is_enabled() and not existing_document:
+        if not billing.consume_quotation(document_id):
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "code": "FREE_QUOTATIONS_EXHAUSTED",
+                    "message": "Your 10 free quotations have been used. Choose the monthly plan to continue.",
+                    "monthly_price_ngn": billing.monthly_price_ngn(),
+                },
+            )
+
     pdf_url = store.save_pdf(document_id, result.pdf_bytes)
     preview_urls = store.save_previews(document_id, previews)
 
@@ -241,6 +266,57 @@ def generate(req: GenerateRequest):
         document_id=document_id, page_count=result.page_count, pdf_url=pdf_url,
         preview_urls=preview_urls, validation=report, warnings=warnings,
     )
+
+
+@app.get("/billing/status")
+def billing_status():
+    if not supabase_client.is_enabled():
+        return {
+            "free_limit": billing.FREE_QUOTATION_LIMIT,
+            "free_used": 0,
+            "free_remaining": billing.FREE_QUOTATION_LIMIT,
+            "paid_until": None,
+            "monthly_plan_active": False,
+            "monthly_price_ngn": billing.monthly_price_ngn(),
+            "billing_enabled": False,
+        }
+    return billing.get_status()
+
+
+@app.post("/billing/checkout")
+def billing_checkout(req: CheckoutRequest):
+    frontend_url = (os.environ.get("FRONTEND_URL") or "").strip()
+    if not frontend_url:
+        raise HTTPException(status_code=503, detail="FRONTEND_URL is not configured.")
+    checkout_url = billing.create_checkout(req.email, req.name, frontend_url)
+    return {"checkout_url": checkout_url}
+
+
+@app.post("/billing/verify")
+def billing_verify(req: PaymentVerificationRequest):
+    if not supabase_client.is_enabled():
+        raise HTTPException(status_code=503, detail="Account billing requires Supabase configuration.")
+    billing.verify_and_activate(
+        req.transaction_id,
+        req.tx_ref,
+        expected_user=require_current_user(),
+    )
+    return billing.get_status()
+
+
+@app.post("/billing/flutterwave/webhook")
+async def flutterwave_webhook(request: Request):
+    expected_hash = (os.environ.get("FLUTTERWAVE_WEBHOOK_SECRET_HASH") or "").strip()
+    received_hash = request.headers.get("verif-hash", "")
+    if not expected_hash:
+        raise HTTPException(status_code=503, detail="Flutterwave webhook verification is not configured.")
+    if not hmac.compare_digest(expected_hash, received_hash):
+        raise HTTPException(status_code=401, detail="Invalid Flutterwave webhook signature.")
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid Flutterwave webhook payload.")
+    billing.process_webhook(payload)
+    return {"received": True}
 
 
 # -- documents ---------------------------------------------------------------

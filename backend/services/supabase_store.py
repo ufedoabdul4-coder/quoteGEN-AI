@@ -392,7 +392,7 @@ def load_profile() -> BusinessProfile:
     result = (
         _client()
         .table(PROFILES_TABLE)
-        .select("data")
+        .select("data,business_type")
         .eq("user_id", user_id)
         .limit(1)
         .execute()
@@ -401,7 +401,9 @@ def load_profile() -> BusinessProfile:
     if not rows:
         return BusinessProfile()
     try:
-        return BusinessProfile.model_validate(rows[0]["data"])
+        data = dict(rows[0]["data"])
+        data["business_type"] = rows[0].get("business_type") or data.get("business_type", "")
+        return BusinessProfile.model_validate(data)
     except Exception:
         return BusinessProfile()
 
@@ -409,6 +411,10 @@ def load_profile() -> BusinessProfile:
 def save_profile(profile: BusinessProfile) -> BusinessProfile:
     user_id = require_current_user()
     _client().table(PROFILES_TABLE).upsert(
-        {"user_id": user_id, "data": profile.model_dump(mode="json")}
+        {
+            "user_id": user_id,
+            "business_type": profile.business_type,
+            "data": profile.model_dump(mode="json"),
+        }
     ).execute()
     return profile

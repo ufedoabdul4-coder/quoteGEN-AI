@@ -16,3 +16,11 @@ services:
         sync: false
       - key: CORS_ORIGINS
         value: https://quotegen1-ai.netlify.app
+      - key: FRONTEND_URL
+        value: https://quotegen1-ai.netlify.app
+      - key: FLUTTERWAVE_MONTHLY_PRICE_NGN
+        value: "13310"
+      - key: FLUTTERWAVE_SECRET_KEY
+        sync: false
+      - key: FLUTTERWAVE_WEBHOOK_SECRET_HASH
+        sync: false
