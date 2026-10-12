@@ -66,7 +66,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signUp: async (email, password) => {
       const client = supabase;
       if (!client) throw new Error('Accounts are not enabled.');
-      const { data, error } = await client.auth.signUp({ email, password });
+      const { data, error } = await client.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: window.location.origin },
+      });
       if (error) throw new Error(error.message);
       return { needsConfirmation: !data.session };
     },
