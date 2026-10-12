@@ -21,6 +21,7 @@ from services import job_draft  # noqa: E402
 from services.job_draft import (  # noqa: E402
     JobDraftError,
     _amount_in_words,
+    _allocate_costs,
     _build_quotation,
     active_master_reference,
 )
@@ -50,7 +51,7 @@ class JobDraftTests(unittest.TestCase):
                 "Final handover",
             ],
             "cost_items": [
-                {"description": f"Detailed cleaning task {index}", "amount_ngn": 100000}
+                {"description": f"Detailed cleaning task {index}", "relative_weight": 1}
                 for index in range(1, 9)
             ],
             "terms": ["Confirm site measurements before work begins."],
@@ -80,16 +81,48 @@ class JobDraftTests(unittest.TestCase):
         self.assertEqual(result.financials.grand_total, 800000)
         self.assertTrue(result.financials.consistent)
 
-    def test_draft_rejects_total_that_does_not_equal_target(self):
-        self.data["cost_items"][0]["amount_ngn"] = 600001
+    def test_server_allocates_exact_target_using_relative_weights(self):
+        cost_items = [
+            {"description": f"Work item {index}", "relative_weight": index}
+            for index in range(1, 9)
+        ]
+        allocated = _allocate_costs(cost_items, target_total_ngn=850001)
 
-        with self.assertRaisesRegex(JobDraftError, "did not add up to your target"):
-            _build_quotation(
-                self.data,
-                job_description="Bedrooms and bathrooms",
-                target_total_ngn=800000,
-                profile=BusinessProfile(),
-                client=ClientInfo(),
+        self.assertEqual(sum(amount for _, amount in allocated), 850001)
+        self.assertTrue(all(amount >= 1 for _, amount in allocated))
+        self.assertEqual(allocated[0][0], "Work item 1")
+        self.assertLess(allocated[0][1], allocated[-1][1])
+
+    def test_server_reconciles_model_amounts_to_target(self):
+        data = {
+            **self.data,
+            "cost_items": [
+                {"description": f"Detailed cleaning task {index}", "amount_ngn": 1}
+                for index in range(1, 9)
+            ],
+        }
+        _quotation, _missing, total = _build_quotation(
+            data,
+            job_description="Bedrooms and bathrooms",
+            target_total_ngn=850000,
+            profile=BusinessProfile(),
+            client=ClientInfo(),
+        )
+
+        self.assertEqual(total, 850000)
+
+    def test_cost_allocation_rejects_invalid_weights_and_too_small_target(self):
+        for weight in (0, -1, "NaN", "Infinity", "1e-13"):
+            with self.subTest(weight=weight):
+                with self.assertRaisesRegex(JobDraftError, "invalid cost allocation weight"):
+                    _allocate_costs(
+                        [{"description": "Work", "relative_weight": weight}] * 8,
+                        target_total_ngn=850000,
+                    )
+        with self.assertRaisesRegex(JobDraftError, "at least"):
+            _allocate_costs(
+                [{"description": "Work", "relative_weight": 1}] * 8,
+                target_total_ngn=7,
             )
 
     def test_each_separately_described_area_gets_its_own_detailed_section(self):
@@ -129,18 +162,6 @@ class JobDraftTests(unittest.TestCase):
         for area in areas:
             self.assertIn(f"### {area}", quotation)
         self.assertGreaterEqual(quotation.count("- "), 25)
-
-    def test_draft_rejects_fractional_or_invalid_costs(self):
-        self.data["cost_items"][0]["amount_ngn"] = 500000.5
-
-        with self.assertRaisesRegex(JobDraftError, "whole Naira"):
-            _build_quotation(
-                self.data,
-                job_description="Bedrooms and bathrooms",
-                target_total_ngn=800000,
-                profile=BusinessProfile(),
-                client=ClientInfo(),
-            )
 
     def test_master_reference_removes_identity_and_old_prices(self):
         document = pymupdf.open()
@@ -202,5 +223,7 @@ class JobDraftTests(unittest.TestCase):
 
         self.assertIn("Bedroom cleaning; old price [price omitted]", captured_prompts[0])
         self.assertIn("target_proposal_total_ngn", captured_prompts[0])
+        self.assertIn("relative_weight", captured_prompts[0])
+        self.assertIn("server will allocate the exact target total", captured_prompts[0])
         self.assertIn("800000", captured_prompts[0])
         self.assertEqual(result["suggested_total_ngn"], 800000)

@@ -407,7 +407,7 @@ export function CreateQuotation({
                   disabled={Boolean(busy)}
                 />
                 <p className="mt-1 text-xs text-[var(--text-muted)]">
-                  The proposal will total this amount. AI-allocated prices are estimates; review them against your approved rates before sending.
+                  The server allocates this exact total across the AI-suggested work items. Review every estimate against your approved rates before sending.
                 </p>
               </div>
               {jobEstimateNotice && (

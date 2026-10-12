@@ -82,9 +82,10 @@ In **Create a proposal**, choose **Describe a job** to provide the scope, what
 the proposal should cover, and its target total in Naira. The backend reads
 text from the signed-in user's active master proposal, removes its client
 identifiers and old prices, and uses the remaining work categories and detail
-as a guide. It expands each requested area into practical tasks and work phases,
-then checks that its line items sum exactly to the target before rendering it
-with the same master-template design and saving it as a document. The
+as a guide. It expands each requested area into practical tasks and work phases.
+The AI suggests weighted cost lines, and the backend allocates those weights
+so the line items sum exactly to the target before rendering the proposal with
+the same master-template design and saving it as a document. The
 AI-generated prices are estimates, not a rate card; review every line against
 approved rates before sending. The active master must be a text-searchable PDF.
 Job drafting requires `GEMINI_API_KEY` on the backend.

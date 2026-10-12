@@ -172,6 +172,51 @@ def _text_list(data: dict, key: str, *, maximum: int, limit: int = 240) -> list[
     return [_clean_line(value, field=key.replace("_", " "), limit=limit) for value in values]
 
 
+def _allocate_costs(raw_cost_items: object, *, target_total_ngn: int) -> list[tuple[str, int]]:
+    if not isinstance(raw_cost_items, list) or not 8 <= len(raw_cost_items) <= 25:
+        raise JobDraftError("The AI draft did not include a valid cost breakdown.")
+    if target_total_ngn < len(raw_cost_items):
+        raise JobDraftError(
+            f"The target total must be at least ₦{len(raw_cost_items):,} "
+            "to provide a positive amount for every cost line."
+        )
+
+    descriptions: list[str] = []
+    weights: list[Decimal] = []
+    for item in raw_cost_items:
+        if not isinstance(item, dict):
+            raise JobDraftError("The AI draft returned an invalid cost breakdown.")
+        descriptions.append(_clean_line(item.get("description"), field="cost description"))
+        raw_weight = item.get("relative_weight", item.get("weight", item.get("amount_ngn")))
+        if isinstance(raw_weight, bool):
+            raise JobDraftError("The AI draft returned an invalid cost allocation weight.")
+        try:
+            weight = Decimal(str(raw_weight))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise JobDraftError("The AI draft returned an invalid cost allocation weight.") from exc
+        if (
+            not weight.is_finite()
+            or weight < Decimal("1e-12")
+            or weight > Decimal("1e12")
+        ):
+            raise JobDraftError("The AI draft returned an invalid cost allocation weight.")
+        weights.append(weight)
+
+    remaining = target_total_ngn - len(descriptions)
+    total_weight = sum(weights)
+    shares = [Decimal(remaining) * weight / total_weight for weight in weights]
+    amounts = [int(share) + 1 for share in shares]
+    leftover = target_total_ngn - sum(amounts)
+    remainder_order = sorted(
+        range(len(shares)),
+        key=lambda index: (shares[index] - int(shares[index]), -index),
+        reverse=True,
+    )
+    for index in remainder_order[:leftover]:
+        amounts[index] += 1
+    return list(zip(descriptions, amounts))
+
+
 def _scope_sections(
     data: dict, *, minimum_sections: int,
 ) -> list[tuple[str, list[str]]]:
@@ -221,32 +266,12 @@ def _build_quotation(
         _clean_line(profile.name, field="business name", limit=120) if profile.name.strip() else ""
     )
 
-    raw_cost_items = data.get("cost_items")
-    if not isinstance(raw_cost_items, list) or not 8 <= len(raw_cost_items) <= 25:
-        raise JobDraftError("The AI draft did not include a valid cost breakdown.")
-
-    cost_items: list[tuple[str, int]] = []
-    for item in raw_cost_items:
-        if not isinstance(item, dict):
-            raise JobDraftError("The AI draft returned an invalid cost breakdown.")
-        description = _clean_line(item.get("description"), field="cost description")
-        raw_amount = item.get("amount_ngn")
-        if isinstance(raw_amount, bool):
-            raise JobDraftError("The AI draft returned an invalid price.")
-        try:
-            amount = Decimal(str(raw_amount))
-        except (InvalidOperation, TypeError, ValueError) as exc:
-            raise JobDraftError("The AI draft returned an invalid price.") from exc
-        if not amount.is_finite() or amount <= 0 or amount != amount.to_integral_value():
-            raise JobDraftError("The AI draft returned a price that is not a whole Naira amount.")
-        cost_items.append((description, int(amount)))
-
+    cost_items = _allocate_costs(
+        data.get("cost_items"), target_total_ngn=target_total_ngn,
+    )
     total = sum(amount for _, amount in cost_items)
     if total != target_total_ngn:
-        raise JobDraftError(
-            "The AI's cost lines did not add up to your target proposal total. "
-            "No PDF was generated; please retry."
-        )
+        raise JobDraftError("The server could not reconcile the cost allocation.")
 
     lines = [f"# PROPOSAL FOR {title.upper()}"]
     if client_name:
@@ -341,26 +366,28 @@ that are unsupported by either the job brief or the relevant master reference.
 Every room or area in the user's brief must appear as a scope section. Give
 each applicable room/area at least 3 specific, practical tasks, adapted from
 the reference's level of detail and limited to the requested job. Explain the
-work sequence in 4-8 meaningful phases. Create a substantive, relevant cost
-breakdown of 8-25 line items. The cost estimates must sum to EXACTLY the target
-proposal total in whole Nigerian Naira. The target is an exact requested total,
-not merely a ceiling. Do not exceed it, and do not change it. These suggested
-prices are estimates, not a verified agency rate card. Identify missing
-information instead of guessing it. If the job brief could describe overlapping
-rooms or duplicate work, flag the ambiguity for the user to confirm.
+work sequence in 4-8 meaningful phases. Create a substantive, relevant cost breakdown of 8-25 line items. For each
+line item, return a positive relative_weight representing its share of the
+overall cost (for example 1, 2, or 3). Never calculate or return Naira prices:
+the server will allocate the exact target total across these weighted lines.
+These suggested prices are estimates, not a verified agency rate card.
+Identify missing information instead of guessing it. If the job brief could
+describe overlapping rooms or duplicate work, flag the ambiguity for the user
+to confirm.
 
 Return JSON only with this exact shape:
 {{"title":"proposal subject only, without the word Proposal", "scope_sections":[{{"heading":"...", "items":["..."]}}],
  "phases":["..."],
- "cost_items":[{{"description":"...", "amount_ngn":12345}}],
+ "cost_items":[{{"description":"...", "relative_weight":2.5}}],
  "terms":["..."], "missing_info":["..."]}}
 Include 1-14 scope sections with 3-8 items each, at least 8 and no more than
-60 scope tasks in total, 4-8 phases, 8-25 cost items, 1-12 concise terms,
-and up to 20 missing-information notes. Do not include totals or amount-in-words;
-the server computes and verifies them."""
+60 scope tasks in total, 4-8 phases, 8-25 cost items with positive relative
+weights, 1-12 concise terms, and up to 20 missing-information notes. Do not
+include Naira amounts, totals or amount-in-words; the server computes them."""
 
     preferred = (os.getenv("GEMINI_MODEL") or _MODELS[0]).strip()
     candidates = [preferred, *[model for model in _MODELS if model != preferred]][:2]
+    last_error = ""
     for model in candidates:
         try:
             async with httpx.AsyncClient(timeout=30.0) as http:
@@ -398,9 +425,11 @@ the server computes and verifies them."""
                 "notice": _NOTICE,
             }
         except (httpx.HTTPError, JobDraftError) as exc:
+            last_error = str(exc)
             logger.warning("Job quotation drafting with %s failed: %s", model, exc)
 
     raise JobDraftError(
-        "The AI could not create a detailed proposal whose line items match your target total. "
-        "Please try again or revise the target and scope."
+        "The AI draft did not meet the proposal requirements: "
+        f"{last_error or 'the provider returned an unusable response'} "
+        "Please try again."
     )
