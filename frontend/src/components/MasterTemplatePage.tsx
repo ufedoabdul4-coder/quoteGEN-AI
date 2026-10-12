@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react';
-import { FileUp, LoaderCircle, Trash, Upload } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ExternalLink, FileUp, LoaderCircle, Trash, Upload } from 'lucide-react';
 import type { TemplateMeta } from '../types';
-import { api, assetUrl } from '../services/api';
+import { api } from '../services/api';
 
 interface Props {
   activeTemplate: TemplateMeta | null;
@@ -107,9 +107,10 @@ export function MasterTemplatePage({ activeTemplate, onChanged }: Props) {
             </button>
           </div>
           <div className="border-y border-[var(--border)] bg-[var(--surface-2)]">
-            <iframe title={`Preview of ${activeTemplate.name}`}
-              src={assetUrl(`/templates/${activeTemplate.id}/pdf`)}
-              className="h-[min(75vh,900px)] w-full" />
+            <AuthenticatedTemplatePreview
+              key={`${activeTemplate.id}:${activeTemplate.updated_at}`}
+              template={activeTemplate}
+            />
           </div>
           <button type="button"
             className={`w-full border-dashed p-4 text-center transition ${dragging ? 'bg-[var(--gold-soft)]' : ''}`}
@@ -130,6 +131,77 @@ export function MasterTemplatePage({ activeTemplate, onChanged }: Props) {
       )}
 
       {error && <p role="alert" className="text-xs text-[var(--error)]">{error}</p>}
+    </div>
+  );
+}
+
+function AuthenticatedTemplatePreview({ template }: { template: TemplateMeta }) {
+  const [pages, setPages] = useState<string[]>([]);
+  const [openUrl, setOpenUrl] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = '';
+    api.templatePdf(template.id).then(async (pdf) => {
+      const [pdfjs, worker] = await Promise.all([
+        import('pdfjs-dist'),
+        import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+      ]);
+      pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+      const data = await pdf.arrayBuffer();
+      const document = await pdfjs.getDocument({ data }).promise;
+      const renderedPages: string[] = [];
+      for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+        if (!active) return;
+        const page = await document.getPage(pageNumber);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const scale = Math.min(1.5, 1000 / baseViewport.width);
+        const viewport = page.getViewport({ scale });
+        const canvas = window.document.createElement('canvas');
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Unable to render the master PDF preview.');
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+        renderedPages.push(canvas.toDataURL('image/png'));
+      }
+      if (!active) return;
+      objectUrl = URL.createObjectURL(pdf);
+      setPages(renderedPages);
+      setOpenUrl(objectUrl);
+    }).catch((err: unknown) => {
+      if (active) setError(err instanceof Error ? err.message : 'Unable to load master PDF.');
+    });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [template.id]);
+
+  if (error) {
+    return <p role="alert" className="p-6 text-center text-sm text-[var(--error)]">{error}</p>;
+  }
+  if (pages.length === 0) {
+    return <p className="p-6 text-center text-sm text-[var(--text-muted)]">Loading master PDF…</p>;
+  }
+  return (
+    <div className="max-h-[75vh] overflow-auto p-3 sm:p-5">
+      <div className="mb-3 flex justify-end">
+        <a className="btn" href={openUrl} target="_blank" rel="noreferrer">
+          <ExternalLink size={14} /> Open PDF
+        </a>
+      </div>
+      <div className="mx-auto flex max-w-4xl flex-col items-center gap-4">
+        {pages.map((page, index) => (
+          <img
+            key={index}
+            src={page}
+            alt={`${template.name}, page ${index + 1}`}
+            className="h-auto max-w-full border border-[var(--border)] bg-white shadow-lg"
+          />
+        ))}
+      </div>
     </div>
   );
 }

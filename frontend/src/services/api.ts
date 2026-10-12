@@ -140,6 +140,18 @@ export const api = {
 
   template: (id: string) => request<TemplateMeta>(`/templates/${id}`),
 
+  templatePdf: async (id: string): Promise<Blob> => {
+    const response = await apiFetch(`/templates/${id}/pdf`);
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new ApiError(
+        (detail as { detail?: string }).detail || `Unable to load master PDF (${response.status})`,
+        response.status,
+      );
+    }
+    return response.blob();
+  },
+
   uploadTemplate: async (file: File): Promise<TemplateMeta> => {
     const form = new FormData();
     form.append('file', file);
