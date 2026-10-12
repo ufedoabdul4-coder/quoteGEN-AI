@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Upload, Trash, LoaderCircle, Palette, Download } from 'lucide-react';
 import type { ReferenceMeta } from '../types';
-import { api, assetUrl } from '../services/api';
+import { api, openAuthenticatedAsset } from '../services/api';
 
 interface Props {
   references: ReferenceMeta[];
@@ -12,6 +12,14 @@ interface Props {
 export function ReferencesPage({ references, onChanged, onUse }: Props) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
+  const openPdf = async (id: string) => {
+    setError('');
+    try {
+      await openAuthenticatedAsset(`/references/${id}/pdf`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to open the reference PDF.');
+    }
+  };
 
   const upload = async (file: File) => {
     setUploading(true);
@@ -87,10 +95,10 @@ export function ReferencesPage({ references, onChanged, onUse }: Props) {
                 <button type="button" className="btn flex-1" onClick={() => onUse(ref.id)}>
                   Use design
                 </button>
-                <a className="btn px-2 py-1" href={assetUrl(`/references/${ref.id}/pdf`)}
-                  target="_blank" rel="noreferrer" aria-label="Open reference PDF">
+                <button type="button" className="btn px-2 py-1"
+                  onClick={() => { void openPdf(ref.id); }} aria-label="Open reference PDF">
                   <Download size={14} />
-                </a>
+                </button>
                 <button type="button" className="btn btn-danger px-2 py-1"
                   onClick={() => void remove(ref.id)}
                   aria-label="Delete reference">

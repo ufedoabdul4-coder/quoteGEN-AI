@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { FileText, Download, Trash, Pencil, CircleCheck, TriangleAlert, CircleAlert } from 'lucide-react';
 import type { DocumentSummary } from '../types';
-import { assetUrl } from '../services/api';
+import { openAuthenticatedAsset } from '../services/api';
 
 const STATUS: Record<string, { label: string; cls: string; icon: typeof CircleCheck }> = {
   ready: { label: 'Ready', cls: 'chip-ok', icon: CircleCheck },
@@ -16,6 +17,16 @@ interface Props {
 }
 
 export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) {
+  const [error, setError] = useState('');
+  const openPdf = async (path: string) => {
+    setError('');
+    try {
+      await openAuthenticatedAsset(path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to open the PDF.');
+    }
+  };
+
   return (
     <div className="space-y-4">
       <header className="flex items-center justify-between">
@@ -29,6 +40,7 @@ export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) 
           New quotation
         </button>
       </header>
+      {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
 
       {documents.length === 0 ? (
         <div className="card p-10 text-center text-[var(--text-dim)] space-y-2">
@@ -59,10 +71,10 @@ export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) 
                   <Pencil size={14} />
                 </button>
                 {doc.pdf_url && (
-                  <a className="btn px-2 py-1" href={assetUrl(doc.pdf_url)} target="_blank"
-                    rel="noreferrer" aria-label="Open PDF">
+                  <button type="button" className="btn px-2 py-1"
+                    onClick={() => { void openPdf(doc.pdf_url!); }} aria-label="Open PDF">
                     <Download size={14} />
-                  </a>
+                  </button>
                 )}
                 <button type="button" className="btn btn-danger px-2 py-1"
                   onClick={() => onDelete(doc.id)} aria-label="Delete document">

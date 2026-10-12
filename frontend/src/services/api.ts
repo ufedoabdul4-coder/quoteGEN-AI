@@ -28,7 +28,8 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
     }
   }
 
-  const response = await fetch(`${API}${path}`, { ...init, headers });
+  const apiPath = path.startsWith('/api/') ? path.slice(4) : path;
+  const response = await fetch(`${API}${apiPath}`, { ...init, headers });
   if (response.status === 401 && supabase) {
     window.dispatchEvent(new Event('quotegen:unauthorized'));
   }
@@ -78,9 +79,30 @@ const json = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
-export function assetUrl(path: string | null | undefined): string {
-  if (!path) return '';
-  return path.startsWith('/api') ? path : `${API}${path}`;
+export async function authenticatedAsset(path: string): Promise<Blob> {
+  const response = await apiFetch(path);
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new ApiError(
+      (detail as { detail?: string }).detail || `Unable to load file (${response.status})`,
+      response.status,
+    );
+  }
+  return response.blob();
+}
+
+export async function openAuthenticatedAsset(path: string): Promise<void> {
+  const popup = window.open('about:blank', '_blank');
+  if (!popup) throw new Error('Allow pop-ups to open the PDF.');
+  try {
+    const blob = await authenticatedAsset(path);
+    const url = URL.createObjectURL(blob);
+    popup.location.href = url;
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) {
+    popup.close();
+    throw error;
+  }
 }
 
 export const api = {
@@ -141,15 +163,7 @@ export const api = {
   template: (id: string) => request<TemplateMeta>(`/templates/${id}`),
 
   templatePdf: async (id: string): Promise<Blob> => {
-    const response = await apiFetch(`/templates/${id}/pdf`);
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      throw new ApiError(
-        (detail as { detail?: string }).detail || `Unable to load master PDF (${response.status})`,
-        response.status,
-      );
-    }
-    return response.blob();
+    return authenticatedAsset(`/templates/${id}/pdf`);
   },
 
   uploadTemplate: async (file: File): Promise<TemplateMeta> => {

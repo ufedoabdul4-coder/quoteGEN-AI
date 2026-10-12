@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Download, Eye } from 'lucide-react';
+import { authenticatedAsset, openAuthenticatedAsset } from '../services/api';
 
 interface Props {
   pages: string[];
@@ -10,8 +11,56 @@ interface Props {
 
 export function PreviewPane({ pages, pdfUrl, title, emptyHint }: Props) {
   const [index, setIndex] = useState(0);
+  const [loadedPages, setLoadedPages] = useState<{ key: string; urls: string[] } | null>(null);
+  const [assetError, setAssetError] = useState<{ key: string; message: string } | null>(null);
+  const [openingPdf, setOpeningPdf] = useState(false);
+  const pageKey = pages.join('|');
+  const currentPages = loadedPages?.key === pageKey ? loadedPages.urls : [];
+  const currentError = assetError?.key === pageKey ? assetError.message : '';
   const total = pages.length;
   const safeIndex = Math.min(index, Math.max(0, total - 1));
+
+  useEffect(() => {
+    let active = true;
+    const objectUrls: string[] = [];
+    const paths = pageKey ? pageKey.split('|') : [];
+    Promise.all(paths.map(async (path) => {
+      const blob = await authenticatedAsset(path);
+      if (!active) return '';
+      const url = URL.createObjectURL(blob);
+      objectUrls.push(url);
+      return url;
+    })).then((urls) => {
+      if (active) setLoadedPages({ key: pageKey, urls });
+    }).catch((error: unknown) => {
+      if (active) {
+        setAssetError({
+          key: pageKey,
+          message: error instanceof Error ? error.message : 'Unable to load document preview.',
+        });
+      }
+    });
+    return () => {
+      active = false;
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [pageKey]);
+
+  const openPdf = async () => {
+    if (!pdfUrl) return;
+    setOpeningPdf(true);
+    setAssetError(null);
+    try {
+      await openAuthenticatedAsset(pdfUrl);
+    } catch (error) {
+      setAssetError({
+        key: pageKey,
+        message: error instanceof Error ? error.message : 'Unable to open the PDF.',
+      });
+    } finally {
+      setOpeningPdf(false);
+    }
+  };
 
   return (
     <div className="panel flex flex-col h-full overflow-hidden">
@@ -44,24 +93,29 @@ export function PreviewPane({ pages, pdfUrl, title, emptyHint }: Props) {
             <ChevronRight size={16} />
           </button>
           {pdfUrl && (
-            <a className="btn px-2 py-1 ml-1" href={pdfUrl} target="_blank" rel="noreferrer">
+            <button type="button" className="btn px-2 py-1 ml-1" onClick={() => { void openPdf(); }}
+              disabled={openingPdf}>
               <Download size={15} />
               <span className="hidden sm:inline">PDF</span>
-            </a>
+            </button>
           )}
         </div>
       </div>
 
       <div className="flex-1 overflow-auto bg-[var(--bg)] p-4 flex justify-center">
-        {total === 0 ? (
+        {currentError ? (
+          <p role="alert" className="text-sm text-[var(--error)]">{currentError}</p>
+        ) : total === 0 ? (
           <div className="flex flex-col items-center justify-center text-center text-[var(--text-dim)] gap-2 h-full min-h-[240px]">
             <Eye size={26} />
             <p className="text-sm max-w-xs">{emptyHint || 'A preview will appear here.'}</p>
           </div>
+        ) : currentPages.length !== total ? (
+          <p className="text-sm text-[var(--text-muted)]">Loading quotation preview…</p>
         ) : (
           <img
             key={safeIndex}
-            src={pages[safeIndex]}
+            src={currentPages[safeIndex]}
             alt={`Page ${safeIndex + 1}`}
             className="max-w-full h-auto border border-[var(--border)] shadow-lg"
             style={{ background: '#fff' }}

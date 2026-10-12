@@ -6,7 +6,7 @@ import type {
   BusinessProfile, ClientInfo, DocumentRecord, GenerateRequest, TemplateMeta,
   Understanding,
 } from '../types';
-import { api, ApiError, assetUrl } from '../services/api';
+import { api, ApiError, openAuthenticatedAsset } from '../services/api';
 import { PreviewPane } from './PreviewPane';
 import { useAuth } from '../services/auth';
 
@@ -69,7 +69,7 @@ export function CreateQuotation({
     initialDocument?.understanding ?? null,
   );
   const [pages, setPages] = useState<string[]>(
-    initialDocument?.preview_url ? [assetUrl(initialDocument.preview_url)] : [],
+    initialDocument?.preview_url ? [initialDocument.preview_url] : [],
   );
   const [pdfUrl, setPdfUrl] = useState(initialDocument?.pdf_url || '');
   const [busy, setBusy] = useState<Busy>(null);
@@ -99,7 +99,7 @@ export function CreateQuotation({
         buildPayload(currentUnderstanding, profile, client, text, documentId));
       setDocumentId(response.document_id);
       setPdfUrl(response.pdf_url);
-      setPages(response.preview_urls.map((url) => assetUrl(url)));
+      setPages(response.preview_urls);
       onSaved();
     } catch (e) {
       if (e instanceof ApiError && e.status === 402) {
@@ -236,16 +236,19 @@ export function CreateQuotation({
 
       <div className="lg:sticky lg:top-4 h-[calc(100vh-6rem)] min-h-[560px] flex flex-col gap-4">
         <div className="flex-1 min-h-0">
-          <PreviewPane pages={pages} pdfUrl={pdfUrl ? assetUrl(pdfUrl) : undefined}
+          <PreviewPane pages={pages} pdfUrl={pdfUrl || undefined}
             title={understanding?.title}
             emptyHint="Add the quotation details, then generate the document to see it here." />
         </div>
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             {pdfUrl && (
-              <a className="btn ml-auto" href={assetUrl(pdfUrl)} target="_blank" rel="noreferrer">
+              <button type="button" className="btn ml-auto"
+                onClick={() => { void openAuthenticatedAsset(pdfUrl).catch((e: unknown) => {
+                  setError(e instanceof Error ? e.message : 'Unable to open the PDF.');
+                }); }}>
                 <Download size={15} /> Download
-              </a>
+              </button>
             )}
           </div>
           {error && <p className="text-xs text-[var(--error)]">{error}</p>}

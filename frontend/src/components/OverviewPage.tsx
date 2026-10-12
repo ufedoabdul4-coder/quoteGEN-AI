@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { FileText, FileStack, Sparkles, Download, ArrowRight } from 'lucide-react';
 import type { DocumentSummary } from '../types';
-import { assetUrl } from '../services/api';
+import { openAuthenticatedAsset } from '../services/api';
 
 interface Props {
   documents: DocumentSummary[];
@@ -13,7 +14,16 @@ interface Props {
 export function OverviewPage({
   documents, templateCount, onCreate, onOpenDocuments, onOpenTemplates,
 }: Props) {
+  const [error, setError] = useState('');
   const recent = documents.slice(0, 5);
+  const openPdf = async (path: string) => {
+    setError('');
+    try {
+      await openAuthenticatedAsset(path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to open the PDF.');
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -28,6 +38,7 @@ export function OverviewPage({
           <Sparkles size={15} /> New quotation
         </button>
       </header>
+      {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <StatCard icon={FileText} label="Documents" value={documents.length}
@@ -59,10 +70,10 @@ export function OverviewPage({
                   </div>
                 </div>
                 {doc.pdf_url && (
-                  <a className="btn px-2 py-1" href={assetUrl(doc.pdf_url)} target="_blank"
-                    rel="noreferrer" aria-label="Open PDF">
+                  <button type="button" className="btn px-2 py-1"
+                    onClick={() => { void openPdf(doc.pdf_url!); }} aria-label="Open PDF">
                     <Download size={14} />
-                  </a>
+                  </button>
                 )}
               </div>
             ))}
