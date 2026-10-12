@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  LayoutDashboard, FileText, CirclePlus, Building, FileStack,
+  LayoutDashboard, FileText, CirclePlus, Building, FileStack, Menu, X,
 } from 'lucide-react';
 import type {
   BillingStatus, BusinessProfile, DocumentRecord, DocumentSummary, TemplateMeta,
@@ -41,6 +41,7 @@ export default function App() {
     () => new URLSearchParams(window.location.search).get('payment') === 'complete',
   );
   const [route, setRoute] = useState<Route>('overview');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
   const [healthAttempt, setHealthAttempt] = useState(0);
   const [profile, setProfile] = useState<BusinessProfile>(EMPTY_PROFILE);
@@ -256,6 +257,11 @@ export default function App() {
     await loadDocuments();
   };
 
+  const navigateMobile = (nextRoute: Route) => {
+    setRoute(nextRoute);
+    setMobileMenuOpen(false);
+  };
+
   return (
     <div className="flex min-h-screen bg-[var(--bg)]">
       <Sidebar active={route} onNavigate={setRoute} online={online}
@@ -265,33 +271,66 @@ export default function App() {
 
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="md:hidden sticky top-0 z-20 bg-[var(--surface)] border-b border-[var(--border)]">
-          <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
             <div className="flex items-center gap-2">
               <span className="font-semibold">quoteGEN</span>
               <span className="chip chip-gold">AI</span>
             </div>
-            <div className="flex items-center gap-2">
-              <StatusRow online={online} />
-              {configured && (
-                <button type="button" className="btn btn-ghost text-xs" onClick={() => { void handleSignOut(); }}>
-                  Sign out
-                </button>
-              )}
-            </div>
+            <button
+              type="button"
+              className="btn shrink-0"
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-navigation"
+              onClick={() => setMobileMenuOpen((open) => !open)}
+            >
+              {mobileMenuOpen ? <X size={17} /> : <Menu size={17} />}
+              <span>{mobileMenuOpen ? 'Close' : 'Menu'}</span>
+            </button>
           </div>
-          <nav className="flex gap-1 px-2 pb-2 overflow-x-auto">
-            {MOBILE_NAV.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button key={item.id} type="button"
-                  className={`nav-item w-auto ${route === item.id ? 'active' : ''}`}
-                  onClick={() => setRoute(item.id)}>
-                  <Icon size={16} />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
+          {mobileMenuOpen && (
+            <div id="mobile-navigation" className="border-t border-[var(--border)] px-3 py-3">
+              <nav aria-label="Main navigation" className="space-y-1">
+                {MOBILE_NAV.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`nav-item ${route === item.id ? 'active' : ''}`}
+                      aria-current={route === item.id ? 'page' : undefined}
+                      onClick={() => navigateMobile(item.id)}
+                    >
+                      <Icon size={17} />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </nav>
+              <div className="mt-3 space-y-2 border-t border-[var(--border)] px-2 pt-3">
+                <StatusRow online={online} />
+                <div className="text-xs text-[var(--text-dim)]">
+                  {documents.length} document(s)
+                  {' · '}
+                  {templatesLoaded ? `${templates.length} template(s)` : 'Checking templates…'}
+                </div>
+                {configured && email && (
+                  <div className="flex items-center justify-between gap-3 pt-1">
+                    <span className="min-w-0 truncate text-xs text-[var(--text-dim)]">{email}</span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost shrink-0 text-xs"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        void handleSignOut();
+                      }}
+                    >
+                      Sign out
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </header>
 
         <main className="flex-1 min-w-0 p-4 sm:p-6">
