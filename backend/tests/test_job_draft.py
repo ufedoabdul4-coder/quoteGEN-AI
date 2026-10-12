@@ -31,6 +31,9 @@ class JobDraftTests(unittest.TestCase):
     def setUp(self):
         self.data = {
             "title": "Residential Cleaning Quotation",
+            "project_introduction": (
+                "A proposed cleaning service for the requested residential areas."
+            ),
             "scope_sections": [{
                 "heading": "Bedrooms and bathrooms",
                 "items": [
@@ -45,14 +48,39 @@ class JobDraftTests(unittest.TestCase):
                 ],
             }],
             "phases": [
-                "Site preparation",
-                "Room-by-room cleaning",
-                "Quality inspection",
-                "Final handover",
+                {
+                    "title": "Preparation and mobilisation",
+                    "description": "Prepare the site and mobilise the proposed team.",
+                    "activities": ["Protect occupied areas", "Remove loose surface dust"],
+                    "cost_items": [
+                        {"description": f"Preparation task {index}", "relative_weight": 1}
+                        for index in range(1, 4)
+                    ],
+                },
+                {
+                    "title": "Detailed room cleaning",
+                    "description": "Clean the rooms and fixtures in the agreed scope.",
+                    "activities": ["Clean surfaces", "Sanitise bathroom fixtures"],
+                    "cost_items": [
+                        {"description": f"Room cleaning task {index}", "relative_weight": 1}
+                        for index in range(1, 4)
+                    ],
+                },
+                {
+                    "title": "Final inspection and handover",
+                    "description": "Inspect completed work and prepare for handover.",
+                    "activities": ["Inspect completed areas", "Record outstanding access issues"],
+                    "cost_items": [
+                        {"description": f"Handover task {index}", "relative_weight": 1}
+                        for index in range(1, 3)
+                    ],
+                },
             ],
-            "cost_items": [
-                {"description": f"Detailed cleaning task {index}", "relative_weight": 1}
-                for index in range(1, 9)
+            "equipment_materials": ["Proposed vacuum equipment and suitable cleaning cloths"],
+            "quality_assurance": [
+                "Supervisor checks each completed room.",
+                "Correct accessible missed areas before handover.",
+                "Confirm any unresolved site-access limitations with the client.",
             ],
             "terms": ["Confirm site measurements before work begins."],
             "missing_info": ["Confirm the service address."],
@@ -77,6 +105,12 @@ class JobDraftTests(unittest.TestCase):
         self.assertTrue(quotation.startswith("# PROPOSAL FOR RESIDENTIAL CLEANING QUOTATION"))
         self.assertGreaterEqual(quotation.count("- "), 9)
         self.assertIn("Amount in Words: Eight Hundred Thousand Naira only", quotation)
+        self.assertIn("## Project overview", quotation)
+        self.assertIn("## Equipment, tools and materials proposed for deployment", quotation)
+        self.assertIn("## Project execution and quality assurance", quotation)
+        self.assertIn("## Consolidated project cost summary", quotation)
+        self.assertEqual(quotation.count("| Grand Total |"), 1)
+        self.assertEqual(quotation.count("| Subtotal - "), 6)
         self.assertEqual(result.financials.rows_total, 800000)
         self.assertEqual(result.financials.grand_total, 800000)
         self.assertTrue(result.financials.consistent)
@@ -94,12 +128,19 @@ class JobDraftTests(unittest.TestCase):
         self.assertLess(allocated[0][1], allocated[-1][1])
 
     def test_server_reconciles_model_amounts_to_target(self):
+        phases = [
+            {
+                **phase,
+                "cost_items": [
+                    {"description": item["description"], "amount_ngn": 1}
+                    for item in phase["cost_items"]
+                ],
+            }
+            for phase in self.data["phases"]
+        ]
         data = {
             **self.data,
-            "cost_items": [
-                {"description": f"Detailed cleaning task {index}", "amount_ngn": 1}
-                for index in range(1, 9)
-            ],
+            "phases": phases,
         }
         _quotation, _missing, total = _build_quotation(
             data,
@@ -160,7 +201,7 @@ class JobDraftTests(unittest.TestCase):
 
         self.assertEqual(total, 800000)
         for area in areas:
-            self.assertIn(f"### {area}", quotation)
+            self.assertIn(f". {area}", quotation)
         self.assertGreaterEqual(quotation.count("- "), 25)
 
     def test_master_reference_removes_identity_and_old_prices(self):
@@ -224,6 +265,48 @@ class JobDraftTests(unittest.TestCase):
         self.assertIn("Bedroom cleaning; old price [price omitted]", captured_prompts[0])
         self.assertIn("target_proposal_total_ngn", captured_prompts[0])
         self.assertIn("relative_weight", captured_prompts[0])
-        self.assertIn("server will allocate the exact target total", captured_prompts[0])
+        self.assertIn("server allocates the exact target total", captured_prompts[0])
+        self.assertIn('"equipment_materials"', captured_prompts[0])
+        self.assertIn('"quality_assurance"', captured_prompts[0])
+        self.assertIn("each with a description, practical activities", captured_prompts[0])
         self.assertIn("800000", captured_prompts[0])
         self.assertEqual(result["suggested_total_ngn"], 800000)
+
+    def test_provider_quota_error_is_exposed_without_leaking_api_key(self):
+        original_client = httpx.AsyncClient
+
+        async def provider(_request):
+            return httpx.Response(
+                429,
+                json={"error": {
+                    "message": "Quota exceeded for key test-key; retry later.",
+                    "status": "RESOURCE_EXHAUSTED",
+                }},
+            )
+
+        transport = httpx.MockTransport(provider)
+        with (
+            mock.patch.dict(os.environ, {
+                "GEMINI_API_KEY": "test-key",
+                "GEMINI_MODEL": "test-model",
+            }),
+            mock.patch.object(
+                job_draft.httpx,
+                "AsyncClient",
+                side_effect=lambda timeout: original_client(timeout=timeout, transport=transport),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                JobDraftError,
+                r"HTTP 429: Quota exceeded for key \[redacted\]; retry later",
+            ) as raised:
+                asyncio.run(job_draft.draft_quotation(
+                    job_description="Bedrooms and bathrooms",
+                    quotation_goal="A detailed cleaning proposal",
+                    target_total_ngn=800000,
+                    profile=BusinessProfile(),
+                    client=ClientInfo(),
+                    master_reference="Bedroom cleaning reference",
+                ))
+
+        self.assertNotIn("test-key", str(raised.exception))
