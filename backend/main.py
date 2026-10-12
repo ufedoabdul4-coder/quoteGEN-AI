@@ -48,16 +48,6 @@ app = FastAPI(
     version="2.0.0",
 )
 
-_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins or ["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 #: Routes that stay open even once authentication is switched on.
 _PUBLIC_PATHS = {"/health", "/designs", "/billing/flutterwave/webhook"}
 
@@ -109,6 +99,19 @@ async def authenticate(request: Request, call_next):
         return await call_next(request)
     finally:
         reset_current_user(token)
+
+
+# Register CORS after authentication so it wraps responses returned early by
+# the auth middleware, including 401 errors.
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # -- health & designs --------------------------------------------------------

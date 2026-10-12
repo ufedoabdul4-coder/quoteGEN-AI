@@ -47,6 +47,26 @@ class ApiTests(unittest.TestCase):
     def test_health(self):
         self.assertEqual(self.client.get("/health").json()["status"], "ok")
 
+    def test_authentication_errors_include_cors_headers(self):
+        allowed_origin = (
+            "*"
+            if "*" in main._cors_origins
+            else main._cors_origins[0]
+        )
+        origin = (
+            "https://quotegen1-ai.netlify.app"
+            if allowed_origin == "*"
+            else allowed_origin
+        )
+        with (
+            mock.patch.object(main.supabase_client, "is_enabled", return_value=True),
+            mock.patch.object(main.supabase_client, "verify_token", return_value=None),
+        ):
+            response = self.client.get("/templates/active", headers={"Origin": origin})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.headers.get("access-control-allow-origin"), allowed_origin)
+
     def test_billing_status_in_local_mode(self):
         response = self.client.get("/billing/status")
         self.assertEqual(response.status_code, 200)
