@@ -30,8 +30,10 @@ const MOBILE_NAV: { id: Route; label: string; icon: typeof LayoutDashboard }[] =
 
 export default function App() {
   const { configured, ready, session, email, signOut } = useAuth();
+  const userId = session?.user.id;
   const [route, setRoute] = useState<Route>('overview');
   const [online, setOnline] = useState<boolean | null>(null);
+  const [healthAttempt, setHealthAttempt] = useState(0);
   const [profile, setProfile] = useState<BusinessProfile>(EMPTY_PROFILE);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [templates, setTemplates] = useState<TemplateMeta[]>([]);
@@ -70,7 +72,17 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!ready || (configured && !session)) return;
+    let active = true;
+    api.health().then(() => {
+      if (active) setOnline(true);
+    }).catch(() => {
+      if (active) setOnline(false);
+    });
+    return () => { active = false; };
+  }, [healthAttempt]);
+
+  useEffect(() => {
+    if (!ready || (configured && online !== true) || online === null || (configured && !userId)) return;
 
     setRoute('overview');
     setProfile(EMPTY_PROFILE);
@@ -81,12 +93,6 @@ export default function App() {
 
     (async () => {
       try {
-        await api.health();
-        setOnline(true);
-      } catch {
-        setOnline(false);
-      }
-      try {
         const loaded = await api.profile();
         setProfile({ ...EMPTY_PROFILE, ...loaded });
       } catch {
@@ -94,7 +100,7 @@ export default function App() {
       }
       await Promise.all([loadDocuments(), loadTemplates()]);
     })();
-  }, [ready, configured, session?.user.id]);
+  }, [ready, configured, userId, online]);
 
   if (!ready) {
     return (
@@ -104,6 +110,35 @@ export default function App() {
     );
   }
   if (configured && !session) return <LoginPage />;
+  if (configured && online !== true) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-6 text-center">
+        <p className="text-sm text-[var(--text-muted)]">
+          {online === null
+            ? 'Connecting to the quotation server… It may take about a minute to wake up after being idle.'
+            : 'The quotation server could not be reached.'}
+        </p>
+        {online === false && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              setOnline(null);
+              setHealthAttempt((attempt) => attempt + 1);
+            }}
+          >
+            Try again
+          </button>
+        )}
+        {configured && (
+          <button type="button" className="btn btn-ghost text-sm" onClick={() => { void handleSignOut(); }}>
+            Sign out
+          </button>
+        )}
+        {signOutError && <p role="alert" className="text-sm text-[var(--danger,#c0392b)]">{signOutError}</p>}
+      </div>
+    );
+  }
 
   const openCreate = () => {
     setActiveDocument(null);
