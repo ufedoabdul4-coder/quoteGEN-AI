@@ -1,0 +1,31 @@
+{
+  "id": "ref_ef03d4bc1592",
+  "name": "MR YINKA QUOTATION .pdf",
+  "created_at": "2026-10-11T17:47:42",
+  "page_size": "US Letter",
+  "design": {
+    "id": "reference",
+    "name": "MR YINKA QUOTATION .pdf",
+    "description": "Rebuilt from an uploaded reference document.",
+    "kind": "reference",
+    "tokens": {
+      "primary": "#1B1B1B",
+      "accent": "#1B1B1B",
+      "text": "#1B1B1B",
+      "muted": "#616161",
+      "border": "#D9D4C7",
+      "page_bg": "#FFFFFF",
+      "header_bg": "#1B1B1B",
+      "header_text": "#F5F3EE",
+      "table_header_bg": "#1B1B1B",
+      "table_header_text": "#FFFFFF",
+      "zebra": "#F7F5F0"
+    },
+    "font_body": "Times New Roman",
+    "font_heading": "Times New Roman",
+    "accent_rule": true,
+    "preview_url": null,
+    "reference_of": "",
+    "created_at": ""
+  }
+}

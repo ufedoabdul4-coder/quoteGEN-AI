@@ -1,0 +1,38 @@
+{
+  "id": "tpl_42fdba3965f9",
+  "name": "MR YINKA QUOTATION .pdf",
+  "source_filename": "MR YINKA QUOTATION .pdf",
+  "size_bytes": 1634741,
+  "page_count": 10,
+  "status": "ready",
+  "error": "",
+  "created_at": "2026-10-11T19:02:55",
+  "updated_at": "2026-10-12T03:01:59",
+  "is_active": true,
+  "design": {
+    "id": "reference",
+    "name": "MR YINKA QUOTATION .pdf",
+    "description": "Rebuilt from an uploaded reference document.",
+    "kind": "reference",
+    "tokens": {
+      "primary": "#000000",
+      "accent": "#0563C1",
+      "text": "#000000",
+      "muted": "#000000",
+      "border": "#D9D4C7",
+      "page_bg": "#FFFFFF",
+      "header_bg": "#FFFFFF",
+      "header_text": "#000000",
+      "table_header_bg": "#FFFFFF",
+      "table_header_text": "#000000",
+      "zebra": "#FFFFFF"
+    },
+    "font_body": "Times New Roman",
+    "font_heading": "Times New Roman",
+    "accent_rule": true,
+    "preview_url": null,
+    "reference_of": "tpl_42fdba3965f9",
+    "created_at": ""
+  },
+  "kind": "template"
+}
