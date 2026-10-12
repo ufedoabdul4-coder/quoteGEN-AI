@@ -8,8 +8,8 @@ object in PyMuPDF, so this module hands out a single :class:`FontFace` per
 Why not base-14 everywhere? PDF core fonts cannot draw ``₦`` (naira), ``₹``
 (rupee) or ``→``. Money and contact details must survive a round-trip, so when a
 real TrueType file is available we use it. Core fonts remain as the last-resort
-fallback, and any glyph they cannot draw is recorded so validation can report it
-instead of printing an invisible hole.
+fallback, and any glyph they cannot draw is recorded and rendered with a readable
+text equivalent where one exists.
 """
 
 from __future__ import annotations
@@ -24,6 +24,24 @@ import pymupdf
 
 HERE = Path(__file__).resolve().parent
 BUNDLED_FONT_DIR = HERE.parent / "assets" / "fonts"
+
+_GLYPH_FALLBACKS = {
+    "₦": "NGN ",
+    "₹": "INR ",
+    "€": "EUR ",
+    "£": "GBP ",
+    "¥": "JPY ",
+    "→": "->",
+    "←": "<-",
+    "•": "*",
+    "·": "*",
+    "–": "-",
+    "—": "-",
+    "“": '"',
+    "”": '"',
+    "‘": "'",
+    "’": "'",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +149,11 @@ class FontFace:
         if not text:
             return 0.0
         try:
-            return float(self._font.text_length(text, fontsize=size))
+            safe_text = "".join(
+                ch if self.has_glyph(ch) else _GLYPH_FALLBACKS.get(ch, "?")
+                for ch in text
+            )
+            return float(self._font.text_length(safe_text, fontsize=size))
         except Exception:
             return len(text) * size * 0.5
 
@@ -150,10 +172,9 @@ class FontFace:
             return True
 
     def sanitize(self, text: str) -> str:
-        """Replace glyphs the face cannot draw, recording them for validation.
+        """Replace unsupported glyphs with readable text, recording each one.
 
-        The replacement is deliberately visible (``?``) rather than a blank, so
-        a missing symbol can never masquerade as correct content.
+        Unknown glyphs remain visibly marked with ``?`` rather than disappearing.
         """
         out_chars: List[str] = []
         for ch in text:
@@ -161,7 +182,7 @@ class FontFace:
                 out_chars.append(ch)
             else:
                 self._missing[ch] = self._missing.get(ch, 0) + 1
-                out_chars.append("?")
+                out_chars.append(_GLYPH_FALLBACKS.get(ch, "?"))
         return "".join(out_chars)
 
     def missing_glyphs(self) -> Dict[str, int]:

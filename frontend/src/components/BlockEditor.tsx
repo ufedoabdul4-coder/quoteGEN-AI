@@ -53,7 +53,7 @@ export function BlockEditor({ blocks, onChange }: { blocks: SemanticBlock[]; onC
                 value={block.type}
                 onChange={(e) => update(index, { type: e.target.value })}
               >
-                {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                {TYPES.map((t) => <option key={t} value={t}>{formatType(t)}</option>)}
               </select>
 
               {block.value !== null && (
@@ -137,10 +137,14 @@ function AddBlock({ onAdd }: { onAdd: (type: string) => void }) {
         onChange={(e) => { if (e.target.value) onAdd(e.target.value); }}
       >
         <option value="">Add block…</option>
-        {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        {TYPES.map((t) => <option key={t} value={t}>{formatType(t)}</option>)}
       </select>
     </div>
   );
+}
+
+function formatType(type: string): string {
+  return type.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function IconBtn({ children, label, onClick, disabled }: {

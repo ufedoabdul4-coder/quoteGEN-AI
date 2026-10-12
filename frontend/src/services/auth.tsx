@@ -3,14 +3,14 @@ import {
   type ReactNode,
 } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase, supabaseConfigured } from './supabase';
+import { setRememberSession, supabase, supabaseConfigured } from './supabase';
 
 type AuthContextValue = {
   configured: boolean;
   ready: boolean;
   session: Session | null;
   email: string | null;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string, remember: boolean) => Promise<void>;
   signUp: (name: string, email: string, password: string) => Promise<{ needsConfirmation: boolean }>;
   signOut: () => Promise<void>;
 };
@@ -57,9 +57,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ready,
     session,
     email: session?.user?.email ?? null,
-    signIn: async (email, password) => {
+    signIn: async (email, password, remember) => {
       const client = supabase;
       if (!client) throw new Error('Accounts are not enabled.');
+      setRememberSession(remember);
       const { error } = await client.auth.signInWithPassword({ email, password });
       if (error) throw new Error(error.message);
     },

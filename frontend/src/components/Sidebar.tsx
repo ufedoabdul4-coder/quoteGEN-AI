@@ -25,7 +25,7 @@ interface Props {
   onNavigate: (id: Route) => void;
   online: boolean | null;
   documentCount: number;
-  templateCount: number;
+  templateCount: number | null;
   email: string | null;
   onSignOut: () => void;
 }
@@ -70,7 +70,9 @@ export function Sidebar({
       <div className="px-4 py-4 border-t border-[var(--border)] space-y-2">
         <StatusRow online={online} />
         <div className="text-xs text-[var(--text-dim)]">{documentCount} document(s)</div>
-        <div className="text-xs text-[var(--text-dim)]">{templateCount} template(s)</div>
+        <div className="text-xs text-[var(--text-dim)]">
+          {templateCount === null ? 'Checking templates…' : `${templateCount} template(s)`}
+        </div>
         {email && (
           <div className="flex items-center justify-between gap-2 pt-2">
             <span className="text-xs text-[var(--text-dim)] truncate">{email}</span>

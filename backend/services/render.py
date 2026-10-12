@@ -168,7 +168,7 @@ def render_pdf_document(design: Design, blocks: list[FlowBlock], registry: FontR
     return RenderResult(pdf_bytes=data, page_count=layout.page_count, warnings=list(layout.warnings))
 
 
-def render_previews(pdf_bytes: bytes, *, dpi: int = 110, max_pages: int = 12) -> list[bytes]:
+def render_previews(pdf_bytes: bytes, *, dpi: int = 90, max_pages: int = 12) -> list[bytes]:
     """Rasterise the first pages of a PDF to PNG for the in-app preview."""
     images: list[bytes] = []
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")

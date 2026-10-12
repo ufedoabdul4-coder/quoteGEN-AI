@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -17,6 +17,8 @@ from services.context import require_current_user
 BILLING_ACCOUNTS = "billing_accounts"
 BILLING_PAYMENTS = "billing_payments"
 FREE_QUOTATION_LIMIT = 10
+FREE_DAILY_LIMIT = 3
+FREE_QUOTA_WINDOW_DAYS = 30
 FLUTTERWAVE_API = "https://api.flutterwave.com/v3"
 
 
@@ -46,28 +48,52 @@ def _secret_key() -> str:
 
 def get_status() -> dict[str, Any]:
     user_id = require_current_user()
+    now = datetime.now(timezone.utc)
     result = (
         _client().table(BILLING_ACCOUNTS)
-        .select("free_quotations_used,paid_until")
+        .select("paid_until")
         .eq("user_id", user_id)
         .limit(1)
         .execute()
     )
     account = (result.data or [{}])[0]
-    used = int(account.get("free_quotations_used") or 0)
     paid_until = account.get("paid_until")
     active = False
     if paid_until:
-        active = datetime.fromisoformat(paid_until.replace("Z", "+00:00")) > datetime.now(timezone.utc)
+        active = datetime.fromisoformat(paid_until.replace("Z", "+00:00")) > now
+
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    rolling_start = (now - timedelta(days=FREE_QUOTA_WINDOW_DAYS)).isoformat()
+    generated_today = _usage_count(user_id, since=today_start)
+    free_today = _usage_count(user_id, since=today_start, free_only=True)
+    free_used = _usage_count(user_id, since=rolling_start, free_only=True)
     return {
         "free_limit": FREE_QUOTATION_LIMIT,
-        "free_used": used,
-        "free_remaining": max(0, FREE_QUOTATION_LIMIT - used),
+        "free_used": free_used,
+        "free_remaining": max(0, FREE_QUOTATION_LIMIT - free_used),
+        "free_daily_limit": FREE_DAILY_LIMIT,
+        "free_used_today": free_today,
+        "free_daily_remaining": max(0, FREE_DAILY_LIMIT - free_today),
+        "pdfs_generated_today": generated_today,
+        "free_quota_window_days": FREE_QUOTA_WINDOW_DAYS,
         "paid_until": paid_until,
         "monthly_plan_active": active,
         "monthly_price_ngn": monthly_price_ngn(),
         "billing_enabled": True,
     }
+
+
+def _usage_count(user_id: str, *, since: str, free_only: bool = False) -> int:
+    query = (
+        _client().table("quotation_usage")
+        .select("document_id", count="exact", head=True)
+        .eq("user_id", user_id)
+        .gte("created_at", since)
+    )
+    if free_only:
+        query = query.eq("is_free", True)
+    result = query.execute()
+    return int(result.count or 0)
 
 
 def consume_quotation(document_id: str) -> bool:

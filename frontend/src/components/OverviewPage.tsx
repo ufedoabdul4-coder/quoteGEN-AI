@@ -1,18 +1,19 @@
 import { useState } from 'react';
 import { FileText, FileStack, Sparkles, Download, ArrowRight } from 'lucide-react';
-import type { DocumentSummary } from '../types';
+import type { BillingStatus, DocumentSummary } from '../types';
 import { openAuthenticatedAsset } from '../services/api';
 
 interface Props {
   documents: DocumentSummary[];
-  templateCount: number;
+  billingStatus: BillingStatus | null;
+  templateCount: number | null;
   onCreate: () => void;
   onOpenDocuments: () => void;
   onOpenTemplates: () => void;
 }
 
 export function OverviewPage({
-  documents, templateCount, onCreate, onOpenDocuments, onOpenTemplates,
+  documents, billingStatus, templateCount, onCreate, onOpenDocuments, onOpenTemplates,
 }: Props) {
   const [error, setError] = useState('');
   const recent = documents.slice(0, 5);
@@ -40,10 +41,12 @@ export function OverviewPage({
       </header>
       {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
 
+      <UsageCard status={billingStatus} />
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <StatCard icon={FileText} label="Documents" value={documents.length}
           action={onOpenDocuments} actionLabel="View all" />
-        <StatCard icon={FileStack} label="Master templates" value={templateCount}
+        <StatCard icon={FileStack} label="Master templates" value={templateCount ?? '—'}
           action={onOpenTemplates} actionLabel="Manage" />
       </div>
 
@@ -84,10 +87,45 @@ export function OverviewPage({
   );
 }
 
+function UsageCard({ status }: { status: BillingStatus | null }) {
+  if (!status) {
+    return (
+      <section className="card p-4 text-sm text-[var(--text-muted)]" aria-label="PDF generation usage">
+        Loading PDF generation usage…
+      </section>
+    );
+  }
+  return (
+    <section className="card p-4 space-y-3" aria-label="PDF generation usage">
+      <div>
+        <h2 className="text-sm font-semibold">PDF generation usage</h2>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">
+          {status.pdfs_generated_today} PDF{status.pdfs_generated_today === 1 ? '' : 's'} generated today
+        </p>
+      </div>
+      {status.monthly_plan_active ? (
+        <p className="text-sm text-[var(--ok)]">
+          Unlimited generations active until{' '}
+          {status.paid_until ? new Date(status.paid_until).toLocaleDateString() : 'the end of your plan'}.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--text-muted)]">
+          <span>
+            Rolling 30-day free usage: {status.free_used} / {status.free_limit}
+          </span>
+          <span>
+            Free PDFs today (UTC): {status.free_used_today} / {status.free_daily_limit}
+          </span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function StatCard({ icon: Icon, label, value, action, actionLabel }: {
   icon: typeof FileText;
   label: string;
-  value: number;
+  value: number | string;
   action?: () => void;
   actionLabel?: string;
 }) {

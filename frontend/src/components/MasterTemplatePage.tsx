@@ -5,10 +5,11 @@ import { api } from '../services/api';
 
 interface Props {
   activeTemplate: TemplateMeta | null;
+  templatesLoaded: boolean;
   onChanged: () => Promise<void>;
 }
 
-export function MasterTemplatePage({ activeTemplate, onChanged }: Props) {
+export function MasterTemplatePage({ activeTemplate, templatesLoaded, onChanged }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -67,7 +68,12 @@ export function MasterTemplatePage({ activeTemplate, onChanged }: Props) {
           }} />
       </header>
 
-      {!activeTemplate ? (
+      {!templatesLoaded ? (
+        <div className="card flex items-center justify-center gap-3 p-10 text-sm text-[var(--text-muted)]">
+          <LoaderCircle size={20} className="spin text-[var(--gold)]" />
+          Checking for your saved master document…
+        </div>
+      ) : !activeTemplate ? (
         <button type="button"
           className={`card w-full border-dashed p-10 text-center transition ${dragging ? 'border-[var(--gold)] bg-[var(--gold-soft)]' : ''}`}
           onClick={() => inputRef.current?.click()}

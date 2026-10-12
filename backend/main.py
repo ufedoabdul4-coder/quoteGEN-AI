@@ -240,7 +240,10 @@ def generate(req: GenerateRequest):
                 status_code=402,
                 detail={
                     "code": "FREE_QUOTATIONS_EXHAUSTED",
-                    "message": "Your 10 free quotations have been used. Choose the monthly plan to continue.",
+                    "message": (
+                        "The free plan allows 10 quotations in a rolling 30-day period "
+                        "and up to 3 free quotations per UTC day. Choose the monthly plan to continue."
+                    ),
                     "monthly_price_ngn": billing.monthly_price_ngn(),
                 },
             )
@@ -278,6 +281,11 @@ def billing_status():
             "free_limit": billing.FREE_QUOTATION_LIMIT,
             "free_used": 0,
             "free_remaining": billing.FREE_QUOTATION_LIMIT,
+            "free_daily_limit": billing.FREE_DAILY_LIMIT,
+            "free_used_today": 0,
+            "free_daily_remaining": billing.FREE_DAILY_LIMIT,
+            "pdfs_generated_today": 0,
+            "free_quota_window_days": billing.FREE_QUOTA_WINDOW_DAYS,
             "paid_until": None,
             "monthly_plan_active": False,
             "monthly_price_ngn": billing.monthly_price_ngn(),
@@ -460,18 +468,37 @@ async def upload_template(file: UploadFile = File(...)):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not read that PDF: {exc}") from exc
 
-    template = TemplateMeta(
-        id=store.new_id("tpl"),
-        name=file.filename or "Master template",
-        source_filename=file.filename or "",
-        size_bytes=len(data),
-        page_count=page_count,
-        status="ready",
-        created_at=store.timestamp(),
-        design=to_design_info(design),
-    )
+    existing_templates = store.list_templates()
+    template = next((item for item in existing_templates if item.is_active), None)
+    if template is None and existing_templates:
+        template = existing_templates[0]
+
+    if template is None:
+        template = TemplateMeta(
+            id=store.new_id("tpl"),
+            name=file.filename or "Master template",
+            source_filename=file.filename or "",
+            size_bytes=len(data),
+            page_count=page_count,
+            status="ready",
+            created_at=store.timestamp(),
+            design=to_design_info(design),
+        )
+    else:
+        template.name = file.filename or "Master template"
+        template.source_filename = file.filename or ""
+        template.size_bytes = len(data)
+        template.page_count = page_count
+        template.status = "ready"
+        template.error = ""
+        template.design = to_design_info(design)
+        template.updated_at = store.timestamp()
+
     store.save_reference(template.id, data)
     store.save_template_meta(template)
+    for duplicate in existing_templates:
+        if duplicate.id != template.id:
+            store.delete_template(duplicate.id)
     store.set_active_template_id(template.id)
     template.is_active = True
     return template.model_dump()

@@ -3,9 +3,9 @@ import {
   LayoutDashboard, FileText, CirclePlus, Building, FileStack,
 } from 'lucide-react';
 import type {
-  BusinessProfile, DocumentRecord, DocumentSummary, TemplateMeta,
+  BillingStatus, BusinessProfile, DocumentRecord, DocumentSummary, TemplateMeta,
 } from './types';
-import { api } from './services/api';
+import { api, ApiError } from './services/api';
 import { Sidebar, StatusRow } from './components/Sidebar';
 import type { Route } from './components/Sidebar';
 import { OverviewPage } from './components/OverviewPage';
@@ -45,7 +45,10 @@ export default function App() {
   const [healthAttempt, setHealthAttempt] = useState(0);
   const [profile, setProfile] = useState<BusinessProfile>(EMPTY_PROFILE);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
   const [templates, setTemplates] = useState<TemplateMeta[]>([]);
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
+  const [templateLoadError, setTemplateLoadError] = useState('');
   const [activeTemplate, setActiveTemplate] = useState<TemplateMeta | null>(null);
   const [activeDocument, setActiveDocument] = useState<DocumentRecord | null>(null);
   const [signOutError, setSignOutError] = useState('');
@@ -80,17 +83,41 @@ export default function App() {
     }
   };
 
-  const loadTemplates = async () => {
+  const loadBillingStatus = async () => {
     try {
-      const [loadedTemplates, active] = await Promise.all([
-        api.templates(), api.activeTemplate(),
-      ]);
-      setTemplates(loadedTemplates);
-      setActiveTemplate(active);
-    } catch {
-      setTemplates([]);
-      setActiveTemplate(null);
+      setBillingStatus(await api.billingStatus());
+    } catch (error) {
+      console.error('Unable to load quotation usage.', error);
+      setBillingStatus(null);
     }
+  };
+
+  const loadTemplates = async () => {
+    setTemplateLoadError('');
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const loadedTemplates = await api.templates();
+        setTemplates(loadedTemplates);
+        setActiveTemplate(
+          loadedTemplates.find((template) => template.is_active)
+          ?? loadedTemplates.find((template) => template.status === 'ready')
+          ?? null,
+        );
+        setTemplatesLoaded(true);
+        return;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof ApiError && error.status < 500) break;
+        if (attempt < 2) {
+          await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+        }
+      }
+    }
+    setTemplateLoadError(
+      'We couldn’t load your master templates. Your saved templates have not been removed. Try again.',
+    );
+    console.error('Unable to load master templates.', lastError);
   };
 
   useEffect(() => {
@@ -110,8 +137,11 @@ export default function App() {
     setProfile(EMPTY_PROFILE);
     setDocuments([]);
     setTemplates([]);
+    setTemplatesLoaded(false);
+    setTemplateLoadError('');
     setActiveTemplate(null);
     setActiveDocument(null);
+    setBillingStatus(null);
 
     (async () => {
       try {
@@ -120,7 +150,7 @@ export default function App() {
       } catch {
         /* keep defaults */
       }
-      await Promise.all([loadDocuments(), loadTemplates()]);
+      await Promise.allSettled([loadDocuments(), loadTemplates(), loadBillingStatus()]);
     })();
   }, [ready, configured, userId, online]);
 
@@ -223,7 +253,8 @@ export default function App() {
   return (
     <div className="flex min-h-screen bg-[var(--bg)]">
       <Sidebar active={route} onNavigate={setRoute} online={online}
-        documentCount={documents.length} templateCount={templates.length}
+        documentCount={documents.length}
+        templateCount={templatesLoaded ? templates.length : null}
         email={email} onSignOut={() => { void handleSignOut(); }} />
 
       <div className="flex-1 min-w-0 flex flex-col">
@@ -263,10 +294,19 @@ export default function App() {
               {signOutError}
             </p>
           )}
+          {templateLoadError && (
+            <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded border border-[var(--error)] p-3 text-sm">
+              <span>{templateLoadError}</span>
+              <button type="button" className="btn" onClick={() => { void loadTemplates(); }}>
+                Retry
+              </button>
+            </div>
+          )}
           {route === 'overview' && (
             <OverviewPage
               documents={documents}
-              templateCount={templates.length}
+              billingStatus={billingStatus}
+              templateCount={templatesLoaded ? templates.length : null}
               onCreate={openCreate}
               onOpenDocuments={() => setRoute('documents')}
               onOpenTemplates={() => setRoute('templates')}
@@ -289,13 +329,16 @@ export default function App() {
               activeTemplate={activeTemplate}
               onManageTemplates={() => setRoute('templates')}
               initialDocument={activeDocument}
-              onSaved={loadDocuments}
+              onSaved={async () => {
+                await Promise.all([loadDocuments(), loadBillingStatus()]);
+              }}
             />
           )}
 
           {route === 'templates' && (
             <MasterTemplatePage
               activeTemplate={activeTemplate}
+              templatesLoaded={templatesLoaded}
               onChanged={loadTemplates}
             />
           )}

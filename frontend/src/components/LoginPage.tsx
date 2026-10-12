@@ -7,6 +7,7 @@ export function LoginPage({ initialEmail = '' }: { initialEmail?: string }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -18,7 +19,7 @@ export function LoginPage({ initialEmail = '' }: { initialEmail?: string }) {
     setBusy(true);
     try {
       if (mode === 'signin') {
-        await signIn(email.trim(), password);
+        await signIn(email.trim(), password, remember);
       } else {
         const { needsConfirmation } = await signUp(name.trim(), email.trim(), password);
         if (needsConfirmation) {
@@ -71,6 +72,17 @@ export function LoginPage({ initialEmail = '' }: { initialEmail?: string }) {
               placeholder="you@business.com"
             />
           </label>
+
+          {mode === 'signin' && (
+            <label className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(event) => setRemember(event.target.checked)}
+              />
+              Remember me on this device
+            </label>
+          )}
 
           <label className="flex flex-col gap-1">
             <span className="label">Password</span>

@@ -97,6 +97,20 @@ class UnderstandingTests(unittest.TestCase):
             ["Professional Cleaning • Fumigation • Pest Control"],
         )
 
+    def test_base14_fallback_renders_currency_symbols_as_codes(self):
+        from services.fonts import FontFace
+
+        face = FontFace(
+            display="Helvetica",
+            family="helvetica",
+            bold=False,
+            italic=False,
+            base14="helv",
+        )
+
+        self.assertEqual(face.sanitize("₦25,000"), "NGN 25,000")
+        self.assertGreater(face.text_length("₦25,000", 10), face.text_length("25,000", 10))
+
 
 class FidelityTests(unittest.TestCase):
     """Source words and case survive; headings and totals are never dropped."""

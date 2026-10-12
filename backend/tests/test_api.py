@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pymupdf
@@ -71,7 +72,55 @@ class ApiTests(unittest.TestCase):
         response = self.client.get("/billing/status")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["free_limit"], 10)
+        self.assertEqual(response.json()["free_daily_limit"], 3)
+        self.assertEqual(response.json()["free_quota_window_days"], 30)
+        self.assertEqual(response.json()["pdfs_generated_today"], 0)
         self.assertFalse(response.json()["billing_enabled"])
+
+    def test_billing_status_reports_daily_and_rolling_usage(self):
+        class Query:
+            def __init__(self, result):
+                self.result = result
+
+            def select(self, *_args, **_kwargs):
+                return self
+
+            def eq(self, *_args, **_kwargs):
+                return self
+
+            def gte(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, *_args, **_kwargs):
+                return self
+
+            def execute(self):
+                return self.result
+
+        account_query = Query(SimpleNamespace(data=[{"paid_until": None}]))
+        usage_results = iter([
+            SimpleNamespace(count=4),
+            SimpleNamespace(count=2),
+            SimpleNamespace(count=7),
+        ])
+        usage_query = Query(None)
+        usage_query.execute = lambda: next(usage_results)
+        client = mock.Mock()
+        client.table.side_effect = lambda name: (
+            account_query if name == "billing_accounts" else usage_query
+        )
+
+        with (
+            mock.patch.object(main.billing, "_client", return_value=client),
+            mock.patch.object(main.billing, "require_current_user", return_value="test-user"),
+        ):
+            status = main.billing.get_status()
+
+        self.assertEqual(status["pdfs_generated_today"], 4)
+        self.assertEqual(status["free_used_today"], 2)
+        self.assertEqual(status["free_used"], 7)
+        self.assertEqual(status["free_remaining"], 3)
+        self.assertEqual(status["free_daily_remaining"], 1)
 
     def test_generation_blocks_when_quota_rpc_denies(self):
         understanding = self.client.post(
@@ -199,6 +248,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(
             self.client.get("/templates/active").json()["template"]["id"], template_id,
         )
+
+        uploaded_again = self.client.post(
+            "/templates/upload",
+            files={"file": ("replacement.pdf", source, "application/pdf")},
+        )
+        self.assertEqual(uploaded_again.status_code, 200, uploaded_again.text)
+        self.assertEqual(uploaded_again.json()["id"], template_id)
+        self.assertEqual(len(self.client.get("/templates").json()["templates"]), 1)
 
         listing = self.client.get("/templates").json()["templates"]
         self.assertTrue(any(item["id"] == template_id for item in listing))

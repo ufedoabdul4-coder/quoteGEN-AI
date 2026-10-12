@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import {
-  Sparkles, LoaderCircle, Download, ScanText,
+  Sparkles, LoaderCircle, Download, ScanText, Pencil, X, Check,
 } from 'lucide-react';
 import type {
   BusinessProfile, ClientInfo, DocumentRecord, GenerateRequest, TemplateMeta,
-  Understanding,
+  SemanticBlock, Understanding,
 } from '../types';
 import { api, ApiError, openAuthenticatedAsset } from '../services/api';
 import { PreviewPane } from './PreviewPane';
+import { BlockEditor } from './BlockEditor';
 import { useAuth } from '../services/auth';
 
 const SAMPLE = `Quotation for Acme Facilities Ltd
@@ -68,6 +69,7 @@ export function CreateQuotation({
   const [understanding, setUnderstanding] = useState<Understanding | null>(
     initialDocument?.understanding ?? null,
   );
+  const [draftUnderstanding, setDraftUnderstanding] = useState<Understanding | null>(null);
   const [pages, setPages] = useState<string[]>(
     initialDocument?.preview_url ? [initialDocument.preview_url] : [],
   );
@@ -111,6 +113,39 @@ export function CreateQuotation({
       } else {
         setError((e as Error).message);
       }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const startEditing = () => {
+    if (!understanding) return;
+    setDraftUnderstanding({
+      ...understanding,
+      blocks: understanding.blocks.map((block) => ({ ...block, items: [...block.items] })),
+    });
+  };
+
+  const updateDraftBlocks = (blocks: SemanticBlock[]) => {
+    setDraftUnderstanding((current) => current ? { ...current, blocks } : current);
+  };
+
+  const regenerateEditedQuotation = async () => {
+    if (!draftUnderstanding) return;
+    setBusy('generate');
+    setError('');
+    try {
+      const response = await api.generate(
+        buildPayload(draftUnderstanding, profile, client, text, documentId),
+      );
+      setUnderstanding(draftUnderstanding);
+      setDraftUnderstanding(null);
+      setDocumentId(response.document_id);
+      setPdfUrl(response.pdf_url);
+      setPages(response.preview_urls);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Unable to regenerate the quotation.');
     } finally {
       setBusy(null);
     }
@@ -177,8 +212,9 @@ export function CreateQuotation({
           {quotaExhausted && (
             <div className="panel p-4 space-y-3" role="status">
               <div>
-                <h2 className="font-semibold">You’ve used your 10 free quotations</h2>
+                <h2 className="font-semibold">You’ve reached your free generation limit</h2>
                 <p className="text-sm text-[var(--text-muted)] mt-1">
+                  The free plan allows 10 quotations in any rolling 30 days, with up to 3 per UTC day.
                   Get unlimited quotations for one month for{' '}
                   {monthlyPrice === null ? '₦13,310' : `₦${monthlyPrice.toLocaleString('en-NG')}`}.
                   This is a one-time monthly payment; it does not auto-renew.
@@ -199,6 +235,38 @@ export function CreateQuotation({
             </div>
           )}
 
+          {draftUnderstanding ? (
+            <div className="space-y-3">
+              <div className="panel p-3">
+                <h2 className="text-sm font-semibold">Edit quotation content</h2>
+                <p className="text-xs text-[var(--text-muted)] mt-1">
+                  Change, remove, or reorder content, then regenerate. Your master design is preserved.
+                </p>
+              </div>
+              <BlockEditor blocks={draftUnderstanding.blocks} onChange={updateDraftBlocks} />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => { void regenerateEditedQuotation(); }}
+                  disabled={Boolean(busy) || draftUnderstanding.blocks.length === 0}
+                >
+                  {busy === 'generate'
+                    ? <LoaderCircle size={15} className="spin" />
+                    : <Check size={15} />}
+                  {busy === 'generate' ? 'Regenerating…' : 'Apply changes & regenerate'}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setDraftUnderstanding(null)}
+                  disabled={Boolean(busy)}
+                >
+                  <X size={15} /> Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
           <div className="space-y-2">
               <textarea
                 className="textarea"
@@ -230,6 +298,7 @@ export function CreateQuotation({
                 </p>
               )}
           </div>
+          )}
         </div>
 
       </div>
@@ -243,12 +312,20 @@ export function CreateQuotation({
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             {pdfUrl && (
+              <>
+              {understanding && (
+                <button type="button" className="btn"
+                  onClick={startEditing} disabled={Boolean(busy)}>
+                  <Pencil size={15} /> Edit content
+                </button>
+              )}
               <button type="button" className="btn ml-auto"
                 onClick={() => { void openAuthenticatedAsset(pdfUrl).catch((e: unknown) => {
                   setError(e instanceof Error ? e.message : 'Unable to open the PDF.');
                 }); }}>
                 <Download size={15} /> Download
               </button>
+              </>
             )}
           </div>
           {error && <p className="text-xs text-[var(--error)]">{error}</p>}

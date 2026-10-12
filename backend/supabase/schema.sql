@@ -52,9 +52,18 @@ create table if not exists public.billing_accounts (
 create table if not exists public.quotation_usage (
     user_id uuid not null references auth.users (id) on delete cascade,
     document_id text not null,
+    is_free boolean not null default true,
     created_at timestamptz not null default now(),
     primary key (user_id, document_id)
 );
+
+alter table public.quotation_usage
+    add column if not exists is_free boolean not null default false;
+
+-- Legacy usage rows predate paid/free tagging; retain them for the daily total
+-- but don't let unknown historical plan usage consume the new free allowance.
+alter table public.quotation_usage
+    alter column is_free set default true;
 
 create table if not exists public.billing_payments (
     tx_ref text primary key,
@@ -77,6 +86,8 @@ where business_type = ''
 create index if not exists documents_user_updated_idx on public.documents (user_id, updated_at desc);
 create index if not exists references_user_kind_idx  on public.references (user_id, kind);
 create index if not exists profiles_business_type_idx on public.profiles (business_type);
+create index if not exists quotation_usage_user_created_idx
+    on public.quotation_usage (user_id, created_at desc);
 
 -- ---------------------------------------------------------------------------
 -- row level security
@@ -131,6 +142,9 @@ set search_path = ''
 as $$
 declare
     account public.billing_accounts%rowtype;
+    free_today integer;
+    free_last_30_days integer;
+    is_free_generation boolean;
 begin
     insert into public.billing_accounts (user_id)
     values (p_user_id)
@@ -148,18 +162,32 @@ begin
         return true;
     end if;
 
-    if account.paid_until is null or account.paid_until <= now() then
-        if account.free_quotations_used >= 10 then
+    is_free_generation := account.paid_until is null or account.paid_until <= now();
+    if is_free_generation then
+        select count(*) into free_today
+        from public.quotation_usage
+        where user_id = p_user_id
+          and is_free
+          and created_at >= date_trunc('day', now() at time zone 'UTC') at time zone 'UTC';
+
+        select count(*) into free_last_30_days
+        from public.quotation_usage
+        where user_id = p_user_id
+          and is_free
+          and created_at >= now() - interval '30 days';
+
+        if free_today >= 3 or free_last_30_days >= 10 then
             return false;
         end if;
+
         update public.billing_accounts
         set free_quotations_used = free_quotations_used + 1,
             updated_at = now()
         where user_id = p_user_id;
     end if;
 
-    insert into public.quotation_usage (user_id, document_id)
-    values (p_user_id, p_document_id);
+    insert into public.quotation_usage (user_id, document_id, is_free)
+    values (p_user_id, p_document_id, is_free_generation);
     return true;
 end;
 $$;

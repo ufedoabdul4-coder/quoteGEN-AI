@@ -37,6 +37,11 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Netlify adds this floating badge over app controls on public sites. */
+iframe#nl-badge-frame {
+  display: none !important;
+}
+
 ::selection {
   background: var(--gold);
   color: #141414;

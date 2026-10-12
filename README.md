@@ -58,7 +58,8 @@ Sign-up asks for a full name and stores it in the Supabase auth user's
 
 ## Quotation plan and Flutterwave
 
-New accounts can generate 10 quotations for free. A quotation is counted only
+New accounts can generate up to 10 new quotations free in any rolling 30-day
+period, capped at 3 free quotations per UTC day. A quotation is counted only
 after successful generation; regenerating an existing saved quotation does not
 use another free quotation. After the free quota is used, one payment of
 ₦13,310 unlocks unlimited quotations for one calendar month. The payment does
@@ -67,6 +68,10 @@ not auto-renew. The price is configured with
 
 Run the updated `backend/supabase/schema.sql` in the Supabase SQL Editor. It
 creates the per-account billing tables and the atomic quota/payment functions.
+The free allowance is 10 new quotations in a rolling 30-day period, capped at
+3 free quotations per UTC day. The dashboard shows daily and rolling-window
+usage. Re-run the updated schema to install these server-side limits.
+
 The monthly plan is not activated from the browser return URL alone: the
 backend verifies transaction status, reference, currency, and amount directly
 with Flutterwave before granting access.

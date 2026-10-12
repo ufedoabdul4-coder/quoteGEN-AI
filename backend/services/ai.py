@@ -36,8 +36,6 @@ DEFAULT_MODEL = "gemini-3.8-flash"
 FALLBACK_MODELS = (
     "gemini-3.8-flash",
     "gemini-flash-latest",
-    "gemini-3.7-flash",
-    "gemini-flash-lite-latest",
 )
 _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
@@ -107,7 +105,7 @@ async def understand(
         return base, False, "", notes
 
     preferred = model or os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
-    candidates = [preferred] + [m for m in FALLBACK_MODELS if m != preferred]
+    candidates = ([preferred] + [m for m in FALLBACK_MODELS if m != preferred])[:2]
     for chosen in candidates:
         try:
             data = await _ask_gemini(base, key, chosen, profile, client)
@@ -137,7 +135,7 @@ async def _ask_gemini(base: Understanding, key: str, model: str,
         "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"},
     }
     url = _ENDPOINT.format(model=model)
-    async with httpx.AsyncClient(timeout=40.0) as http:
+    async with httpx.AsyncClient(timeout=20.0) as http:
         response = await http.post(url, headers={"x-goog-api-key": key}, json=payload)
     if response.status_code != 200:
         raise RuntimeError(f"HTTP {response.status_code}")

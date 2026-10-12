@@ -119,6 +119,11 @@ export interface BillingStatus {
   free_limit: number;
   free_used: number;
   free_remaining: number;
+  free_daily_limit: number;
+  free_used_today: number;
+  free_daily_remaining: number;
+  pdfs_generated_today: number;
+  free_quota_window_days: number;
   paid_until: string | null;
   monthly_plan_active: boolean;
   monthly_price_ngn: number;
