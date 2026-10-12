@@ -32,7 +32,7 @@ Scope of works
 Payment terms: 70% deposit on award, balance on completion.
 Signature: ______________________`;
 
-type Busy = 'understand' | 'generate' | null;
+type Busy = 'draft' | 'understand' | 'generate' | null;
 
 interface Props {
   profile: BusinessProfile;
@@ -44,7 +44,8 @@ interface Props {
 
 function buildPayload(
   understanding: Understanding, profile: BusinessProfile, client: ClientInfo, rawInput: string,
-  documentId?: string | null,
+  documentId?: string | null, inputKind: 'paste' | 'job' = 'paste',
+  jobMissingInfo: string[] = [],
 ): GenerateRequest {
   return {
     title: understanding.title || 'Quotation',
@@ -55,6 +56,8 @@ function buildPayload(
     reference_id: null,
     raw_input: rawInput,
     document_id: documentId ?? null,
+    input_kind: inputKind,
+    job_missing_info: jobMissingInfo,
   };
 }
 
@@ -63,6 +66,22 @@ export function CreateQuotation({
 }: Props) {
   const { email, session } = useAuth();
   const [text, setText] = useState(initialDocument?.raw_input || '');
+  const [inputMode, setInputMode] = useState<'paste' | 'job'>('paste');
+  const [generatedFromJob, setGeneratedFromJob] = useState(
+    initialDocument?.input_kind === 'job',
+  );
+  const [jobDescription, setJobDescription] = useState('');
+  const [quotationGoal, setQuotationGoal] = useState('');
+  const [budgetNgn, setBudgetNgn] = useState('');
+  const [jobMissingInfo, setJobMissingInfo] = useState<string[]>(
+    initialDocument?.job_missing_info ?? [],
+  );
+  const [jobTotals, setJobTotals] = useState<{ total: number; budget: number } | null>(null);
+  const [jobEstimateNotice, setJobEstimateNotice] = useState(
+    initialDocument?.input_kind === 'job'
+      ? 'This quotation contains AI-generated price allocations. Review each line against your approved rates before sending.'
+      : '',
+  );
   const client: ClientInfo = initialDocument?.client
     ?? { name: '', email: '', phone: '', address: '' };
   const [documentId, setDocumentId] = useState<string | null>(initialDocument?.id ?? null);
@@ -98,7 +117,60 @@ export function CreateQuotation({
 
       setBusy('generate');
       const response = await api.generate(
-        buildPayload(currentUnderstanding, profile, client, text, documentId));
+        buildPayload(
+          currentUnderstanding, profile, client, text, documentId,
+          generatedFromJob ? 'job' : 'paste', jobMissingInfo,
+        ));
+      setDocumentId(response.document_id);
+      setPdfUrl(response.pdf_url);
+      setPages(response.preview_urls);
+      onSaved();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 402) {
+        setQuotaExhausted(true);
+        if (typeof e.detail === 'object' && e.detail?.monthly_price_ngn) {
+          setMonthlyPrice(e.detail.monthly_price_ngn);
+        }
+        setError('');
+      } else {
+        setError((e as Error).message);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const generateFromJob = async () => {
+    const budget = Number(budgetNgn);
+    if (!jobDescription.trim() || !quotationGoal.trim() || !Number.isSafeInteger(budget) || budget <= 0) {
+      setError('Enter the job description, quotation objective, and a valid maximum budget in Naira.');
+      return;
+    }
+    setBusy('draft');
+    setError('');
+    setJobMissingInfo([]);
+    try {
+      const draft = await api.draftJobQuotation({
+        job_description: jobDescription.trim(),
+        quotation_goal: quotationGoal.trim(),
+        budget_ngn: budget,
+        profile,
+        client,
+      });
+      setText(draft.quotation_text);
+      setGeneratedFromJob(true);
+      setJobMissingInfo(draft.missing_info);
+      setJobTotals({ total: draft.suggested_total_ngn, budget: draft.budget_ngn });
+      setJobEstimateNotice(draft.notice);
+      setEngine({ usedAi: true, model: draft.model });
+      setUnderstanding(draft.understanding);
+      setBusy('generate');
+      const response = await api.generate(
+        buildPayload(
+          draft.understanding, profile, client, draft.quotation_text, documentId, 'job',
+          draft.missing_info,
+        ),
+      );
       setDocumentId(response.document_id);
       setPdfUrl(response.pdf_url);
       setPages(response.preview_urls);
@@ -136,7 +208,10 @@ export function CreateQuotation({
     setError('');
     try {
       const response = await api.generate(
-        buildPayload(draftUnderstanding, profile, client, text, documentId),
+        buildPayload(
+          draftUnderstanding, profile, client, text, documentId,
+          generatedFromJob ? 'job' : inputMode, jobMissingInfo,
+        ),
       );
       setUnderstanding(draftUnderstanding);
       setDraftUnderstanding(null);
@@ -182,6 +257,25 @@ export function CreateQuotation({
                 Add the quotation content. It will be placed in your master template.
               </p>
             </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Quotation input mode">
+            <button
+              type="button"
+              className={`btn ${inputMode === 'paste' ? 'btn-primary' : ''}`}
+              onClick={() => setInputMode('paste')}
+              disabled={Boolean(busy)}
+            >
+              Write a quotation
+            </button>
+            <button
+              type="button"
+              className={`btn ${inputMode === 'job' ? 'btn-primary' : ''}`}
+              onClick={() => setInputMode('job')}
+              disabled={Boolean(busy)}
+            >
+              Describe a job
+            </button>
           </div>
 
           {activeTemplate && (
@@ -266,8 +360,92 @@ export function CreateQuotation({
                 </button>
               </div>
             </div>
+          ) : inputMode === 'job' ? (
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="job-description" className="label">Job description</label>
+                <textarea
+                  id="job-description"
+                  className="textarea"
+                  value={jobDescription}
+                  onChange={(e) => setJobDescription(e.target.value)}
+                  placeholder={'Describe the rooms, areas, quantities, and work required…\n\nFor example: 3 bedrooms with toilets, sitting room, guest room with toilet, open kitchen, dining room, family lounge with balcony, and BQ.'}
+                  maxLength={10000}
+                  style={{ minHeight: 190 }}
+                  disabled={Boolean(busy)}
+                />
+              </div>
+              <div>
+                <label htmlFor="quotation-goal" className="label">
+                  What should the quotation cover?
+                </label>
+                <textarea
+                  id="quotation-goal"
+                  className="textarea"
+                  value={quotationGoal}
+                  onChange={(e) => setQuotationGoal(e.target.value)}
+                  placeholder="For example: a complete post-construction cleaning service, including the work phases and exclusions."
+                  maxLength={2000}
+                  style={{ minHeight: 88 }}
+                  disabled={Boolean(busy)}
+                />
+              </div>
+              <div>
+                <label htmlFor="job-budget" className="label">Approved maximum budget (₦)</label>
+                <input
+                  id="job-budget"
+                  className="input"
+                  type="number"
+                  min="1"
+                  max="999999999999"
+                  step="1"
+                  inputMode="numeric"
+                  value={budgetNgn}
+                  onChange={(e) => setBudgetNgn(e.target.value)}
+                  placeholder="850000"
+                  disabled={Boolean(busy)}
+                />
+                <p className="mt-1 text-xs text-[var(--text-muted)]">
+                  The AI will suggest a cost breakdown that does not exceed this amount. Check all rates before sending.
+                </p>
+              </div>
+              {jobEstimateNotice && (
+                <div className="panel p-3 text-xs" role="status">{jobEstimateNotice}</div>
+              )}
+              {jobTotals && (
+                <div className="panel p-3 text-xs" role="status">
+                  Suggested total: <strong>₦{jobTotals.total.toLocaleString('en-NG')}</strong>
+                  {' '}of approved maximum ₦{jobTotals.budget.toLocaleString('en-NG')}.
+                </div>
+              )}
+              {jobMissingInfo.length > 0 && (
+                <div className="panel p-3 text-xs" role="status">
+                  <div className="font-semibold mb-1">Confirm these details before sending:</div>
+                  <ul className="list-disc pl-5 space-y-1">
+                    {jobMissingInfo.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}
+                  </ul>
+                </div>
+              )}
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => { void generateFromJob(); }}
+                disabled={quotaExhausted || Boolean(busy) || !activeTemplate}
+              >
+                {busy
+                  ? <LoaderCircle size={15} className="spin" />
+                  : <Sparkles size={15} />}
+                {busy === 'draft' ? 'Drafting quotation…'
+                  : busy === 'understand' ? 'Preparing quotation…'
+                    : busy === 'generate' ? 'Generating document…'
+                      : pdfUrl ? 'Draft again & generate' : 'Draft & generate quotation'}
+              </button>
+              {engine?.usedAi && (
+                <p className="text-xs text-[var(--text-muted)]">Drafted by {engine.model || 'AI'}</p>
+              )}
+            </div>
           ) : (
-          <div className="space-y-2">
+            <div className="space-y-2">
               <textarea
                 className="textarea"
                 value={text}
@@ -290,14 +468,19 @@ export function CreateQuotation({
                   <ScanText size={15} /> Load sample
                 </button>
               </div>
+              {jobEstimateNotice && (
+                <div className="panel p-3 text-xs" role="status">{jobEstimateNotice}</div>
+              )}
               {engine && (
                 <p className="text-xs text-[var(--text-muted)]">
-                  {engine.usedAi
+                  {generatedFromJob
+                    ? `Drafted by ${engine.model || 'AI'}`
+                    : engine.usedAi
                     ? `Understood by ${engine.model || 'AI'}`
                     : 'Understood without AI'}
                 </p>
               )}
-          </div>
+            </div>
           )}
         </div>
 

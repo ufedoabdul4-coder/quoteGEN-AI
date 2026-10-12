@@ -76,6 +76,17 @@ The monthly plan is not activated from the browser return URL alone: the
 backend verifies transaction status, reference, currency, and amount directly
 with Flutterwave before granting access.
 
+## Draft a quotation from a job description
+
+In **Create quotation**, choose **Describe a job** to provide the scope, what
+the quotation should cover, and an approved maximum budget in Naira. The
+backend drafts work phases and an estimated cost breakdown, checks that its
+total does not exceed that budget, then sends the result through the same
+quotation parser, master-template renderer, and saved-document flow as a
+manually written quotation. The AI-generated prices are suggestions, not a
+rate card; review every line against the business's approved rates before
+sending. Job drafting requires `GEMINI_API_KEY` on the backend.
+
 In Render, set these backend environment variables:
 
 - `FLUTTERWAVE_SECRET_KEY`: the Flutterwave secret API key; keep it server-side.

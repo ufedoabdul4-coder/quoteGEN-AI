@@ -28,6 +28,8 @@ from models import (  # noqa: E402
     ActiveTemplateRequest,
     BusinessProfile,
     DocumentRecord,
+    JobDraftRequest,
+    JobDraftResponse,
     GenerateRequest,
     GenerateResponse,
     Settings,
@@ -36,7 +38,7 @@ from models import (  # noqa: E402
     UnderstandRequest,
     UnderstandResponse,
 )
-from services import ai, pipeline, reference, store  # noqa: E402
+from services import ai, job_draft, pipeline, reference, store  # noqa: E402
 from services import supabase_client  # noqa: E402
 from services import billing  # noqa: E402
 from services.context import require_current_user, reset_current_user, set_current_user  # noqa: E402
@@ -137,6 +139,21 @@ async def understand(req: UnderstandRequest):
     )
     return UnderstandResponse(understanding=understanding, used_ai=used_ai,
                               model=model, notes=notes)
+
+
+@app.post("/job-draft", response_model=JobDraftResponse)
+async def draft_job_quotation(req: JobDraftRequest):
+    try:
+        return await job_draft.draft_quotation(
+            job_description=req.job_description,
+            quotation_goal=req.quotation_goal,
+            budget_ngn=req.budget_ngn,
+            profile=req.profile,
+            client=req.client,
+        )
+    except job_draft.JobDraftError as exc:
+        status_code = 503 if "GEMINI_API_KEY is not configured" in str(exc) else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 # -- rendering ---------------------------------------------------------------
@@ -258,7 +275,8 @@ def generate(req: GenerateRequest):
     record.client = req.client
     record.profile = req.profile
     record.raw_input = req.raw_input
-    record.input_kind = "paste"
+    record.input_kind = req.input_kind
+    record.job_missing_info = req.job_missing_info
     record.understanding = req.understanding
     record.validation = report
     record.pdf_url = pdf_url

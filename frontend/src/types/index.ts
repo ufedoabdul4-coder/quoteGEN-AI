@@ -100,6 +100,24 @@ export interface UnderstandResponse {
   notes: string[];
 }
 
+export interface JobDraftRequest {
+  job_description: string;
+  quotation_goal: string;
+  budget_ngn: number;
+  profile: BusinessProfile;
+  client: ClientInfo;
+}
+
+export interface JobDraftResponse {
+  quotation_text: string;
+  understanding: Understanding;
+  missing_info: string[];
+  budget_ngn: number;
+  suggested_total_ngn: number;
+  model: string;
+  notice: string;
+}
+
 export interface PreviewResponse {
   page_count: number;
   previews: string[];
@@ -152,6 +170,7 @@ export interface DocumentRecord {
   design_id: string;
   input_kind: string;
   raw_input: string;
+  job_missing_info: string[];
   client: ClientInfo;
   profile: BusinessProfile;
   understanding: Understanding;
@@ -195,4 +214,6 @@ export interface GenerateRequest {
   reference_id: string | null;
   raw_input: string;
   document_id?: string | null;
+  input_kind?: 'paste' | 'job';
+  job_missing_info?: string[];
 }

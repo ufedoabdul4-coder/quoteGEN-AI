@@ -8,9 +8,9 @@ document is understood, and carried as data from then on.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +270,9 @@ class DocumentRecord(BaseModel):
     created_at: str = ""
     updated_at: str = ""
     design_id: str = "premium_business"
-    input_kind: str = "describe"  # describe | paste | reference
+    input_kind: str = "describe"  # describe | paste | reference | job
     raw_input: str = ""
+    job_missing_info: List[str] = Field(default_factory=list)
     client: ClientInfo = Field(default_factory=ClientInfo)
     profile: BusinessProfile = Field(default_factory=BusinessProfile)
     understanding: Understanding = Field(default_factory=Understanding)
@@ -302,6 +303,32 @@ class UnderstandResponse(BaseModel):
     notes: List[str] = Field(default_factory=list)
 
 
+class JobDraftRequest(BaseModel):
+    job_description: str = Field(min_length=1, max_length=10000)
+    quotation_goal: str = Field(min_length=1, max_length=2000)
+    budget_ngn: int = Field(gt=0, le=999999999999, strict=True)
+    profile: BusinessProfile = Field(default_factory=BusinessProfile)
+    client: ClientInfo = Field(default_factory=ClientInfo)
+
+    @field_validator("job_description", "quotation_goal")
+    @classmethod
+    def require_nonempty_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field cannot be blank.")
+        return value
+
+
+class JobDraftResponse(BaseModel):
+    quotation_text: str
+    understanding: Understanding
+    missing_info: List[str] = Field(default_factory=list)
+    budget_ngn: int
+    suggested_total_ngn: int
+    model: str
+    notice: str
+
+
 class GenerateRequest(BaseModel):
     title: str = ""
     design_id: str = "premium_business"
@@ -311,6 +338,8 @@ class GenerateRequest(BaseModel):
     reference_id: Optional[str] = None
     raw_input: str = ""
     document_id: Optional[str] = None
+    input_kind: Literal["paste", "job"] = "paste"
+    job_missing_info: List[str] = Field(default_factory=list, max_length=20)
 
 
 class GenerateResponse(BaseModel):

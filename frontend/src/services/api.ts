@@ -7,6 +7,8 @@ import type {
   DocumentRecord,
   GenerateRequest,
   GenerateResponse,
+  JobDraftRequest,
+  JobDraftResponse,
   PreviewResponse,
   ReferenceMeta,
   TemplateMeta,
@@ -113,6 +115,9 @@ export const api = {
 
   understand: (text: string, kind: string, profile: BusinessProfile, client: ClientInfo) =>
     request<UnderstandResponse>('/understand', json({ text, kind, profile, client })),
+
+  draftJobQuotation: (payload: JobDraftRequest) =>
+    request<JobDraftResponse>('/job-draft', json(payload)),
 
   preview: (payload: GenerateRequest) =>
     request<PreviewResponse>('/preview', json(payload)),

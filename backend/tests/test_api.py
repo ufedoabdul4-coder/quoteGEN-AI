@@ -156,6 +156,68 @@ class ApiTests(unittest.TestCase):
         self.assertIn("understanding", body)
         self.assertTrue(body["understanding"]["blocks"])
 
+    def test_job_draft_requires_gemini_configuration(self):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+            response = self.client.post("/job-draft", json={
+                "job_description": "Three bedrooms and a kitchen",
+                "quotation_goal": "A complete deep cleaning quotation",
+                "budget_ngn": 850000,
+            })
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("GEMINI_API_KEY", response.json()["detail"])
+
+    def test_job_draft_rejects_nonpositive_budget(self):
+        response = self.client.post("/job-draft", json={
+            "job_description": "Three bedrooms and a kitchen",
+            "quotation_goal": "A complete deep cleaning quotation",
+            "budget_ngn": 0,
+        })
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_job_draft_returns_parser_ready_quotation(self):
+        from models import BusinessProfile, ClientInfo
+        from services import understanding
+
+        quotation = (
+            "# Residential Cleaning Quotation\n"
+            "## Project scope\n"
+            "- Clean bedrooms\n\n"
+            "## Work phases\n"
+            "1. Prepare site\n\n"
+            "## Cost breakdown\n"
+            "| Description | Amount |\n"
+            "| --- | --- |\n"
+            "| Bedroom cleaning | ₦500,000 |\n"
+            "| Grand Total | ₦500,000 |\n"
+            "Amount in Words: Five Hundred Thousand Naira only"
+        )
+        result = {
+            "quotation_text": quotation,
+            "understanding": understanding.understand(
+                quotation, profile=BusinessProfile(), client=ClientInfo(),
+            ),
+            "missing_info": [],
+            "budget_ngn": 850000,
+            "suggested_total_ngn": 500000,
+            "model": "test-model",
+            "notice": "Review prices before sending.",
+        }
+
+        with mock.patch.object(
+            main.job_draft, "draft_quotation", new=mock.AsyncMock(return_value=result),
+        ):
+            response = self.client.post("/job-draft", json={
+                "job_description": "Clean bedrooms",
+                "quotation_goal": "Deep cleaning",
+                "budget_ngn": 850000,
+            })
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["suggested_total_ngn"], 500000)
+        self.assertTrue(response.json()["understanding"]["blocks"])
+
     def test_generate_and_fetch(self):
         understanding = self.client.post("/understand", json={"text": SAMPLE}).json()["understanding"]
         response = self.client.post("/generate", json={
@@ -164,6 +226,8 @@ class ApiTests(unittest.TestCase):
             "understanding": understanding,
             "profile": {"name": "Bright Works Ltd"},
             "client": {"name": "Acme Ltd"},
+            "input_kind": "job",
+            "job_missing_info": ["Confirm access hours."],
         })
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
@@ -173,6 +237,9 @@ class ApiTests(unittest.TestCase):
         pdf = self.client.get(f"/documents/{doc_id}/pdf")
         self.assertEqual(pdf.status_code, 200)
         self.assertTrue(pdf.content.startswith(b"%PDF"))
+        record = self.client.get(f"/documents/{doc_id}").json()
+        self.assertEqual(record["input_kind"], "job")
+        self.assertEqual(record["job_missing_info"], ["Confirm access hours."])
 
         listing = self.client.get("/documents").json()["documents"]
         self.assertTrue(any(item["id"] == doc_id for item in listing))
