@@ -36,6 +36,7 @@ SEMANTIC_TYPES: tuple[str, ...] = (
     "quotation_date",
     "validity_period",
     "introduction",
+    "heading",
     "major_section_heading",
     "subsection_heading",
     "paragraph",

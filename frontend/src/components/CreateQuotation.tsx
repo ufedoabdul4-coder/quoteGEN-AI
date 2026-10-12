@@ -72,6 +72,7 @@ export function CreateQuotation({
   const [pdfUrl, setPdfUrl] = useState(initialDocument?.pdf_url || '');
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
+  const [engine, setEngine] = useState<{ usedAi: boolean; model: string } | null>(null);
 
   const generateQuotation = async () => {
     setBusy('understand');
@@ -82,6 +83,7 @@ export function CreateQuotation({
         const response = await api.understand(text, 'paste', profile, client);
         currentUnderstanding = response.understanding;
         setUnderstanding(currentUnderstanding);
+        setEngine({ usedAi: response.used_ai, model: response.model });
       }
       if (!currentUnderstanding) {
         throw new Error('Add the quotation details before generating the document.');
@@ -162,6 +164,13 @@ export function CreateQuotation({
                   <ScanText size={15} /> Load sample
                 </button>
               </div>
+              {engine && (
+                <p className="text-xs text-[var(--text-muted)]">
+                  {engine.usedAi
+                    ? `Understood by ${engine.model || 'AI'}`
+                    : 'Understood without AI'}
+                </p>
+              )}
           </div>
         </div>
 

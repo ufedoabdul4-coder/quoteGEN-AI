@@ -68,7 +68,15 @@ class Design:
     body_size: float = 10.5
     title_size: float | None = None
     heading_size: float | None = None
+    subheading_size: float | None = None
+    subsubheading_size: float | None = None
     table_header_size: float | None = None
+    #: Heading sizes as multipliers of the body size, so a design scales as one
+    #: unit and a reference master's hierarchy is rebuilt from its own body size.
+    title_scale: float = 1.9
+    heading_scale: float = 1.36
+    subheading_scale: float = 1.2
+    subsubheading_scale: float = 1.08
     title_bold: bool = True
     heading_bold: bool = True
     table_header_bold: bool = True
@@ -105,8 +113,10 @@ class Design:
     def styles(self, registry: FontRegistry) -> StyleSet:
         t = self.tokens
         reference = self.kind == "reference"
-        title_size = self.title_size or (self.body_size if reference else self.body_size * 1.9)
-        heading_size = self.heading_size or (self.body_size if reference else self.body_size * 1.36)
+        title_size = self.title_size or self.body_size * self.title_scale
+        heading_size = self.heading_size or self.body_size * self.heading_scale
+        subheading_size = self.subheading_size or self.body_size * self.subheading_scale
+        subsubheading_size = self.subsubheading_size or self.body_size * self.subsubheading_scale
         table_header_size = self.table_header_size or (
             self.body_size if reference else self.body_size * 0.98
         )
@@ -117,8 +127,11 @@ class Design:
                            color=t.muted, align=self.title_align, leading=1.25),
             heading=Style(font=self.font_heading, size=heading_size, bold=self.heading_bold,
                           color=t.primary, align=self.heading_align, leading=1.2),
-            subheading=Style(font=self.font_heading, size=heading_size, bold=self.heading_bold,
+            subheading=Style(font=self.font_heading, size=subheading_size, bold=self.heading_bold,
                              color=t.primary, align=self.heading_align, leading=1.22),
+            subsubheading=Style(font=self.font_heading, size=subsubheading_size,
+                                bold=self.heading_bold, color=t.primary,
+                                align=self.heading_align, leading=1.24),
             body=Style(font=self.font_body, size=self.body_size, color=t.text, leading=1.36),
             list_item=Style(font=self.font_body, size=self.body_size, color=t.text, leading=1.34),
             table_header=Style(font=self.font_heading, size=table_header_size,
@@ -128,13 +141,15 @@ class Design:
                              size=self.body_size if reference else self.body_size * 0.98,
                              color=t.text, leading=1.28),
             total=Style(font=self.font_heading,
-                        size=heading_size if reference else self.body_size * 1.02,
+                        size=self.body_size if reference else self.body_size * 1.02,
                         bold=self.heading_bold,
                         color=t.primary, leading=1.25),
             signature=Style(font=self.font_body, size=self.body_size, color=t.text, leading=1.36),
             contact=Style(font=self.font_body,
                           size=self.body_size if reference else self.body_size * 0.96,
                           color=t.muted, leading=1.3),
+            provider=Style(font=self.font_body, size=self.body_size, bold=True,
+                           color=t.text, leading=1.36),
             bullet_text="\u2022",
             bullet_gap=3.0 if not reference else 0.0,
             cell_padding_x=5.0,

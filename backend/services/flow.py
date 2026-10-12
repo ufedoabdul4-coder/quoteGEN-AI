@@ -31,6 +31,7 @@ TITLE = "title"
 SUBTITLE = "subtitle"
 HEADING = "heading"
 SUBHEADING = "subheading"
+SUBSUBHEADING = "subsubheading"
 PARAGRAPH = "paragraph"
 LIST_ITEM = "list_item"
 BULLET_LIST = "bullet_list"
@@ -39,23 +40,28 @@ TABLE = "table"
 SUBTOTAL = "subtotal"
 GRAND_TOTAL = "grand_total"
 SIGNATURE = "signature"
+PROVIDER_NAME = "provider_name"
 CONTACT_INFORMATION = "contact_information"
 TERMS = "terms"
 SPACER = "spacer"
 
 BLOCK_TYPES = {
-    TITLE, SUBTITLE, HEADING, SUBHEADING, PARAGRAPH, LIST_ITEM, BULLET_LIST,
-    NUMBERED_LIST, TABLE, SUBTOTAL, GRAND_TOTAL, SIGNATURE, CONTACT_INFORMATION,
-    TERMS, SPACER,
+    TITLE, SUBTITLE, HEADING, SUBHEADING, SUBSUBHEADING, PARAGRAPH, LIST_ITEM,
+    BULLET_LIST, NUMBERED_LIST, TABLE, SUBTOTAL, GRAND_TOTAL, SIGNATURE,
+    PROVIDER_NAME, CONTACT_INFORMATION, TERMS, SPACER,
 }
 
-HEADING_TYPES = {HEADING, SUBHEADING, TITLE, SUBTITLE}
+HEADING_TYPES = {HEADING, SUBHEADING, SUBSUBHEADING, TITLE, SUBTITLE}
 
-HEADING_GAP = 0.45
+HEADING_GAP = 0.25
 BODY_GAP = 0.55
 LIST_GAP = 0.35
-SECTION_GAP = 1.1
+SECTION_GAP = 1.0
+SUBHEADING_GAP = 0.55
+SUBSUBHEADING_GAP = 0.4
+TITLE_GAP = 1.35
 KEEP_WITH_NEXT_LINES = 3
+LEAD_IN_KEEP_ITEMS = 2
 MAX_FLOW_PAGES = 500
 
 DEFAULT_CELL_PADDING_X = 4.0
@@ -85,6 +91,14 @@ class FlowBlock:
     level: int = 1
     numbered: bool = False
     table: TableSpec | None = None
+    #: Blocks sharing a non-empty group are kept on the same page (a signature
+    #: block, an acceptance clause). Empty means "flow normally".
+    group: str = ""
+    #: A label drawn bold in front of the text (e.g. "Phone:" over the number),
+    #: so a signature block can keep its label's weight without bolding the
+    #: whole line.
+    label: str = ""
+    rich_value: str = ""
 
     def __post_init__(self) -> None:
         if self.type not in BLOCK_TYPES:
@@ -132,6 +146,7 @@ class StyleSet:
     subtitle: Style
     heading: Style
     subheading: Style
+    subsubheading: Style
     body: Style
     list_item: Style
     table_header: Style
@@ -139,6 +154,7 @@ class StyleSet:
     total: Style
     signature: Style
     contact: Style
+    provider: Style
     bullet_text: str = "\u2022"
     bullet_gap: float = 2.0
     cell_padding_x: float = DEFAULT_CELL_PADDING_X
@@ -171,6 +187,8 @@ class FlowPlacement:
     row_top: float = 0.0
     row_height: float = 0.0
     row_index: int = -1
+    #: (label, value) drawn on the first line as bold + regular runs.
+    rich: tuple[str, str] | None = None
 
 
 @dataclass
@@ -189,6 +207,7 @@ def _style_for(kind: str, styles: StyleSet) -> Style:
         SUBTITLE: styles.subtitle,
         HEADING: styles.heading,
         SUBHEADING: styles.subheading,
+        SUBSUBHEADING: styles.subsubheading,
         PARAGRAPH: styles.body,
         LIST_ITEM: styles.list_item,
         BULLET_LIST: styles.body,
@@ -196,6 +215,7 @@ def _style_for(kind: str, styles: StyleSet) -> Style:
         TERMS: styles.body,
         SIGNATURE: styles.signature,
         CONTACT_INFORMATION: styles.contact,
+        PROVIDER_NAME: styles.provider,
         TABLE: styles.table_cell,
         SUBTOTAL: styles.total,
         GRAND_TOTAL: styles.total,
@@ -265,8 +285,9 @@ def _indent_for(block: FlowBlock, styles: StyleSet) -> float:
 
 def gap_after(block: FlowBlock, style: Style) -> float:
     pitch = style.resolved_pitch()
+    # Headings sit ~3pt above the text they name, whatever the body size.
     if block.type in HEADING_TYPES:
-        return pitch * HEADING_GAP
+        return 3.0
     if block.type == LIST_ITEM:
         return pitch * LIST_GAP
     return pitch * BODY_GAP
@@ -275,7 +296,17 @@ def gap_after(block: FlowBlock, style: Style) -> float:
 def gap_before(block: FlowBlock, style: Style) -> float:
     if block.type not in HEADING_TYPES:
         return 0.0
-    return style.resolved_pitch() * SECTION_GAP
+    # Absolute gaps so a hierarchy reads the same on any master: ~12pt before a
+    # major section, ~8pt before a subsection.
+    if block.type == TITLE:
+        return 18.0
+    if block.type == HEADING:
+        return 12.0
+    if block.type == SUBHEADING:
+        return 8.0
+    if block.type == SUBSUBHEADING:
+        return 8.0
+    return 8.0
 
 
 # -- list numbering ----------------------------------------------------------
@@ -407,7 +438,8 @@ class _Cursor:
 
 def _place(cursor: _Cursor, measured: Measured, *, indent: float, kind: str,
            x: float | None = None, width: float | None = None, align: str | None = None,
-           repeated_header: bool = False, numbered: bool = False) -> FlowPlacement:
+           repeated_header: bool = False, numbered: bool = False,
+           rich: tuple[str, str] | None = None) -> FlowPlacement:
     style = measured.style
     left = (cursor.area.left + indent) if x is None else x
     usable = (cursor.area.column_width - indent) if width is None else width
@@ -416,7 +448,7 @@ def _place(cursor: _Cursor, measured: Measured, *, indent: float, kind: str,
         lines=list(measured.lines), font=style.font, size=style.size, color=style.color,
         align=align or style.align, kind=kind, pitch=style.resolved_pitch(),
         bold=style.bold, italic=style.italic, repeated_header=repeated_header,
-        numbered=numbered,
+        numbered=numbered, rich=rich,
     )
     cursor.draw(measured.height)
     return placement
@@ -488,15 +520,109 @@ def _flow_table(cursor: _Cursor, block: FlowBlock, styles: StyleSet, area: Conte
     cursor.gap(styles.body.resolved_pitch() * BODY_GAP)
 
 
-def _keep_with_next_height(blocks, index, styles, area, registry) -> float:
+def _table_height(block: FlowBlock, styles: StyleSet, area: ContentArea,
+                  registry: FontRegistry) -> float:
+    if block.table is None:
+        return 0.0
+    rows, _ = measure_table(block.table, styles, area, registry)
+    if not rows:
+        return 0.0
+    return (sum(row.height for row in rows) + styles.row_gap * len(rows)
+            + styles.body.resolved_pitch() * BODY_GAP)
+
+
+def _run_extent(blocks, index: int, styles: StyleSet, area: ContentArea,
+                registry: FontRegistry, *, with_lead: bool = False) -> float:
+    """Vertical room the block at ``index`` needs *together with what follows it*.
+
+    A heading never ends a page, a lead-in sentence never leaves its first two
+    list items, and an orphan list item is never alone: each block therefore
+    reserves its own height plus every gap inside its kept run. Using one
+    measured extent (rather than adding pieces up by hand) is what keeps a run
+    from being broken by a page boundary one point short.
+    """
     if index >= len(blocks):
         return 0.0
-    following = blocks[index]
-    style = _style_for(following.type, styles)
-    if following.type == TABLE:
-        return min(style.resolved_pitch() * KEEP_WITH_NEXT_LINES, area.usable_height * 0.25)
-    lines = _measure(following.text, style, area.column_width, registry)
-    return style.resolved_pitch() * min(len(lines) or 1, KEEP_WITH_NEXT_LINES)
+    block = blocks[index]
+    _, _, _, measured = _measure_at(blocks, index, styles, area, registry)
+    style = measured.style
+    total = measured.height + gap_after(block, style)
+    if with_lead:
+        total += gap_before(block, style)
+
+    if block.type in HEADING_TYPES:
+        if index + 1 < len(blocks):
+            following = blocks[index + 1]
+            if following.type == TABLE:
+                total += _table_height(following, styles, area, registry)
+            else:
+                total += _run_extent(blocks, index + 1, styles, area, registry, with_lead=True)
+    elif block.type == PARAGRAPH and (block.text or "").rstrip().endswith(":"):
+        seen = 0
+        j = index + 1
+        while j < len(blocks) and seen < LEAD_IN_KEEP_ITEMS:
+            following = blocks[j]
+            if following.type == LIST_ITEM:
+                _, _, _, extra = _measure_at(blocks, j, styles, area, registry)
+                total += gap_before(following, extra.style) + extra.height + gap_after(following, extra.style)
+                seen += 1
+            elif following.type in (BULLET_LIST, NUMBERED_LIST, SPACER):
+                _, _, _, extra = _measure_at(blocks, j, styles, area, registry)
+                total += gap_before(following, extra.style) + extra.height + gap_after(following, extra.style)
+            else:
+                break
+            j += 1
+    elif (block.type == LIST_ITEM and index + 1 < len(blocks)
+            and blocks[index + 1].type == LIST_ITEM):
+        _, _, _, extra = _measure_at(blocks, index + 1, styles, area, registry)
+        total += gap_before(blocks[index + 1], extra.style) + extra.height
+    return total
+
+
+def rich_for(block: FlowBlock) -> tuple[str, str] | None:
+    """The (bold prefix, regular value) pair a block carries on its first line."""
+    label = (block.label or "").strip()
+    if not label:
+        return None
+    return label, block.rich_value
+
+
+def _marker_for(block: FlowBlock, blocks, index: int, styles: StyleSet):
+    if block.type != LIST_ITEM:
+        return block, "", 0.0
+    own, wording = split_own_enumerator(block.text)
+    if own:
+        return replace(block, text=wording), own, _indent_for(block, styles)
+    if block.numbered:
+        return block, _list_marker(block, blocks, index), _indent_for(block, styles)
+    return block, styles.bullet_text, _indent_for(block, styles)
+
+
+def _measure_at(blocks, index: int, styles: StyleSet, area: ContentArea, registry: FontRegistry):
+    effective, marker, indent = _marker_for(blocks[index], blocks, index, styles)
+    measured = _measure_block(effective, styles, area, registry, indent=indent, marker=marker)
+    return effective, marker, indent, measured
+
+
+def _group_span(blocks, start: int) -> tuple[int, int]:
+    group = blocks[start].group
+    if not group:
+        return start, start
+    end = start
+    while end < len(blocks) and blocks[end].group == group:
+        end += 1
+    return start, end
+
+
+def _group_height(blocks, start: int, end: int, styles: StyleSet, area: ContentArea,
+                  registry: FontRegistry) -> float:
+    total = 0.0
+    for position in range(start, end):
+        _, _, _, measured = _measure_at(blocks, position, styles, area, registry)
+        lead = 0.0 if position == start else gap_before(blocks[position], measured.style)
+        total += lead + measured.height + gap_after(blocks[position], measured.style)
+    return total
+
 
 
 def flow_document(blocks, styles: StyleSet, area: ContentArea, registry: FontRegistry,
@@ -526,26 +652,19 @@ def flow_document(blocks, styles: StyleSet, area: ContentArea, registry: FontReg
             index += 1
             continue
 
-        marker = ""
-        if block.type == LIST_ITEM:
-            own, wording = split_own_enumerator(block.text)
-            if own:
-                marker = own
-                block = replace(block, text=wording)
-            elif block.numbered:
-                marker = _list_marker(block, blocks, index)
-            else:
-                marker = styles.bullet_text
+        span_start, span_end = _group_span(blocks, index)
+        if span_end > span_start and (index == 0 or blocks[index - 1].group != block.group):
+            if not cursor.first_on_page:
+                group_height = _group_height(blocks, span_start, span_end, styles, area, registry)
+                if group_height > cursor.remaining:
+                    cursor.new_page()
 
-        indent = _indent_for(block, styles)
-        measured = _measure_block(block, styles, area, registry, indent=indent, marker=marker)
+        block, marker, indent, measured = _measure_at(blocks, index, styles, area, registry)
         if not measured.lines:
             index += 1
             continue
 
-        needed = measured.height
-        if block.type in HEADING_TYPES:
-            needed += _keep_with_next_height(blocks, index + 1, styles, area, registry)
+        needed = _run_extent(blocks, index, styles, area, registry)
         lead = 0.0 if cursor.first_on_page else gap_before(block, measured.style)
         needed += lead
 
@@ -560,7 +679,8 @@ def flow_document(blocks, styles: StyleSet, area: ContentArea, registry: FontReg
                 if not cursor.first_on_page and piece.height > cursor.remaining:
                     cursor.new_page()
                 result.placements.append(_place(cursor, piece, indent=indent, kind=block.type,
-                                                numbered=bool(marker)))
+                                                numbered=bool(marker),
+                                                rich=rich_for(block)))
             result.warnings.append(
                 f"a {block.type} was longer than one page and continued onto the next sheet"
             )
@@ -569,7 +689,7 @@ def flow_document(blocks, styles: StyleSet, area: ContentArea, registry: FontReg
             continue
 
         result.placements.append(_place(cursor, measured, indent=indent, kind=block.type,
-                                        numbered=bool(marker)))
+                                        numbered=bool(marker), rich=rich_for(block)))
         cursor.gap(gap_after(block, measured.style))
         index += 1
 

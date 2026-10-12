@@ -5,10 +5,18 @@ Markdown or a structured note, it decides what each piece *is* — a heading, a
 priced row, a client name, an amount in words — and returns the blocks in the
 order the provider wrote them, together with the amounts it could prove.
 
-Nothing is invented. A figure only becomes monetary when :mod:`services.classify`
-can read it as money, and reconciliation in :mod:`services.financials` reports
-any mismatch rather than hiding it. An AI provider may later refine the
-classification, but this module always produces a valid document on its own.
+Two rules are absolute and are enforced here rather than trusted to a model:
+
+* **Nothing is invented.** A figure only becomes monetary when
+  :mod:`services.classify` can read it as money, and reconciliation in
+  :mod:`services.financials` reports any mismatch rather than hiding it.
+* **Nothing is dropped.** Every non-empty source line must land in a block;
+  :func:`verify_completeness` re-reads the finished blocks against the source
+  and reports the lines that went missing. The understanding stage keeps the
+  provider's own words, in their own case, and never rewrites them.
+
+An AI provider may refine *which* type a block is and *which* heading level it
+carries, but it never supplies the words: the text always comes from the source.
 """
 
 from __future__ import annotations
@@ -20,13 +28,17 @@ from models import BusinessProfile, ClientInfo, SemanticBlock, Understanding
 from services import classify
 from services.financials import reconcile
 
-_INLINE_MD = re.compile(r"(\*\*|__|`{1,3})")
+_INLINE_MD = re.compile(r"(\*\*|`{1,3})")
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 _BULLET = re.compile(r"^\s*([-*•·‣▪◦○])\s+(.*\S)\s*$")
 _NUMBERED = re.compile(r"^\s*(?:\d{1,3}|[a-zA-Z])[.)]\s+(.*\S)\s*$")
 _NUMBERED_HEADING = re.compile(r"^\s*(\d{1,2}(?:\.\d{1,2}){0,3})[.)]?\s+(.+?)\s*$")
 _MD_TABLE_SEP = re.compile(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$")
+_MD_RULE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 _MOJIBAKE_MARKERS = ("Ã", "Â", "â", "ƒ")
+
+_MAX_HEADING_LEVEL = 3
 
 _SUBTOTAL_RE = re.compile(r"^(?:sub[\s-]?total|net\s+total)\b", re.I)
 _GRAND_TOTAL_RE = re.compile(
@@ -58,14 +70,31 @@ _LABELS = {
     "duration": "duration", "timeline": "duration", "delivery": "duration", "lead time": "duration",
     "terms": "term", "payment terms": "term", "terms and conditions": "term", "terms of payment": "term",
     "warranty": "term", "note": "term", "notes": "term", "remarks": "term",
-    "site address": "service_address",
 }
 
 _TITLE_WORDS = {"quotation", "quote", "proposal", "invoice", "estimate", "proforma", "pro forma"}
 
+#: Headings that open a signature block. Their sections stay together on one
+#: page, and a short all-caps name directly under one is the provider, not a
+#: section heading.
+_SIGNATURE_LABELS = {
+    "prepared by", "prepared", "client acceptance", "acceptance",
+    "submitted by", "submitted", "signed by", "authorised by", "authorized by",
+}
+
+#: ``**Label:** value`` and ``**Label**: value`` — the label was deliberately
+#: emboldened next to a plain value, so it must render bold over a regular value.
+_BOLD_LABEL_COLON = re.compile(r"^\s*\*\*(.+?)\*\*\s*:\s*(.*)$")
+_BOLD_LABEL_INNER = re.compile(r"^\s*\*\*(.+?):\*\*\s*(.*)$")
+#: A whole line wrapped in ``**…**`` is emphasised text, never a section heading.
+_WHOLE_BOLD = re.compile(r"^\s*\*\*(.+?)\*\*\s*$")
+
 
 def _clean(text: str) -> str:
-    return _INLINE_MD.sub("", text).strip()
+    """Remove Markdown syntax but keep the provider's own words and their case."""
+    text = _MD_LINK.sub(r"\1", text or "")
+    text = _INLINE_MD.sub("", text)
+    return " ".join(text.split()).strip()
 
 
 def repair_mojibake(text: str) -> str:
@@ -95,7 +124,7 @@ def _make(block_type: str, **kwargs) -> SemanticBlock:
 
 
 def _looks_like_heading(text: str) -> int:
-    """Return heading level (1 or 2) when the line reads like a heading, else 0."""
+    """Return a heading level (1-3) when a line reads like a heading, else 0."""
     stripped = text.strip().rstrip(":").strip()
     if not stripped or len(stripped) > 90:
         return 0
@@ -114,7 +143,10 @@ def _looks_like_heading(text: str) -> int:
         if rest and not rest.endswith(".") and (
             _is_all_caps(rest) or (rest.istitle() and len(rest.split()) <= 8)
         ):
-            return 1 if "." not in numbering else 2
+            if "." in numbering:
+                depth = min(numbering.count(".") + 1, _MAX_HEADING_LEVEL)
+                return max(2, depth)
+            return 1
     return 0
 
 
@@ -122,22 +154,31 @@ def _split_label(line: str) -> tuple[str, str] | None:
     if ":" not in line:
         return None
     label, _, value = line.partition(":")
-    key = label.strip().lower().rstrip("*_ ")
+    key = label.strip().strip("*_` \t").lower()
     if key in _LABELS:
         return _LABELS[key], value.strip()
     return None
 
 
-def _headline_block(text: str, level: int) -> SemanticBlock:
-    low = text.strip().lower().rstrip(":")
-    if low in _TITLE_WORDS or (
-        level == 1 and len(text.split()) <= 4 and any(w in low for w in _TITLE_WORDS)
-    ):
+def _rich_split(line: str) -> tuple[str, str] | None:
+    """A line like ``**Phone:** 0916…`` or ``**Signature:** ______``.
+
+    Returns ``(label, value)`` when the line's label was explicitly bolded, so
+    the renderer can draw the weight the provider chose instead of flattening
+    every ``**…**`` to plain text.
+    """
+    match = _BOLD_LABEL_COLON.match(line) or _BOLD_LABEL_INNER.match(line)
+    if not match:
+        return None
+    label = match.group(1).strip().strip("*_` \t")
+    value = match.group(2).strip()
+    return (label, value) if label else None
+
+
+def _heading_block(text: str, level: int, *, is_title: bool) -> SemanticBlock:
+    if is_title:
         return _make("document_title", text=text, level=1)
-    return _make(
-        "major_section_heading" if level == 1 else "subsection_heading",
-        text=text, level=level,
-    )
+    return _make("heading", text=text, level=min(max(level, 1), _MAX_HEADING_LEVEL))
 
 
 def _row_blocks(cells: list[str], group: str) -> list[SemanticBlock]:
@@ -183,7 +224,7 @@ def _parse_list(lines: list[str], start: int, numbered: bool) -> tuple[list[Sema
         match = pattern.match(lines[index])
         if not match:
             break
-        items.append(_clean(match.group(1)))
+        items.append(_clean(match.group(match.lastindex)))
         index += 1
     block_type = "numbered_list" if numbered else "bullet_list"
     return [_make(block_type, items=items)], index
@@ -205,15 +246,17 @@ def _trailing_cost(line: str) -> tuple[str, str] | None:
     return desc, match.group(0).strip()
 
 
-def _emit_label(label_type: str, value: str, blocks: list[SemanticBlock]) -> None:
+def _emit_label(label_type: str, source_line: str, blocks: list[SemanticBlock]) -> None:
+    """Emit a labelled line, keeping the provider's own label and value together."""
+    text = _clean(source_line)
     if label_type in {
         "client_name", "provider_name", "client_address", "service_address",
         "contact_information", "quotation_number", "quotation_date",
         "validity_period", "duration", "term", "subtitle", "document_title",
     }:
-        blocks.append(_make(label_type, text=value))
+        blocks.append(_make(label_type, text=text))
     else:
-        blocks.append(_make("introduction", text=value))
+        blocks.append(_make("introduction", text=text))
 
 
 def _first_title(blocks: list[SemanticBlock]) -> str:
@@ -221,6 +264,11 @@ def _first_title(blocks: list[SemanticBlock]) -> str:
         if block.type == "document_title" and block.text:
             return block.text
     return ""
+
+
+def _is_numbered_section(text: str) -> bool:
+    match = _NUMBERED_HEADING.match(text.strip().rstrip(":").strip())
+    return bool(match)
 
 
 def understand(
@@ -235,12 +283,63 @@ def understand(
     blocks: list[SemanticBlock] = []
     title = ""
     subtitle = ""
+    title_seen = False
     paragraph_lines: list[str] = []
 
     def flush_paragraph() -> None:
         if paragraph_lines:
             blocks.append(_make("paragraph", text=" ".join(paragraph_lines)))
             paragraph_lines.clear()
+
+    def emit_heading(raw_text: str, level: int) -> None:
+        nonlocal title, title_seen
+        cleaned = _clean(raw_text)
+        if not cleaned:
+            return
+        # A "heading" that is really a total or an amount in words keeps its
+        # label and stays financial; forcing it to a heading would lose a figure.
+        if classify.is_amount_in_words(cleaned):
+            blocks.append(_make("amount_in_words", text=cleaned))
+            return
+        if _GRAND_TOTAL_RE.match(cleaned):
+            value, figure = classify.extract_amount(cleaned)
+            blocks.append(_make("grand_total", text=cleaned, value=value, figure=figure))
+            return
+        if _SUBTOTAL_RE.match(cleaned):
+            value, figure = classify.extract_amount(cleaned)
+            blocks.append(_make("subtotal", text=cleaned, value=value, figure=figure))
+            return
+        low = cleaned.lower().rstrip(":")
+        if low in _SIGNATURE_LABELS:
+            # A signature heading stays a heading (mapped to subsection level);
+            # it is not a person or a company name to nibble off.
+            blocks.append(_make("heading", text=cleaned,
+                                level=min(max(level, 1), _MAX_HEADING_LEVEL)))
+            return
+        # A short all-caps name that sits directly under a signature heading is
+        # the provider's own masthead (KAMIBRIX LIMITED), which belongs on the
+        # PREPARED BY block as emphasised body text, not as a bare section.
+        if (
+            blocks
+            and blocks[-1].type == "heading"
+            and (blocks[-1].text or "").lower().rstrip(":") in _SIGNATURE_LABELS
+            and not _is_numbered_section(cleaned)
+            and _is_all_caps(cleaned)
+            and len(cleaned.split()) <= 6
+        ):
+            blocks.append(_make("provider_name", text=cleaned))
+            return
+        is_title = (
+            level == 1
+            and not title_seen
+            and not _is_numbered_section(cleaned)
+            and (len(cleaned.split()) > 4 or any(w in low for w in _TITLE_WORDS))
+        )
+        block = _heading_block(cleaned, level, is_title=is_title)
+        blocks.append(block)
+        if block.type == "document_title":
+            title = block.text
+            title_seen = True
 
     index = 0
     while index < len(lines):
@@ -249,6 +348,10 @@ def understand(
 
         if not line:
             flush_paragraph()
+            index += 1
+            continue
+
+        if _MD_RULE.match(line):
             index += 1
             continue
 
@@ -266,11 +369,8 @@ def understand(
         heading_match = _HEADING.match(line)
         if heading_match:
             flush_paragraph()
-            level = 1 if len(heading_match.group(1)) == 1 else 2
-            block = _headline_block(_clean(heading_match.group(2)), level)
-            blocks.append(block)
-            if block.type == "document_title":
-                title = block.text
+            level = min(len(heading_match.group(1)), _MAX_HEADING_LEVEL)
+            emit_heading(heading_match.group(2), level)
             index += 1
             continue
 
@@ -280,13 +380,37 @@ def understand(
             blocks.extend(list_blocks)
             continue
 
+        rich = _rich_split(line)
+        if rich:
+            flush_paragraph()
+            label_text, value = rich
+            mapped = _split_label(line)
+            block_type = mapped[0] if mapped else "contact_information"
+            if label_text.lower().startswith("sign"):
+                block_type = "signature"
+            block = _make(block_type, text=_clean(line))
+            block.meta["label"] = label_text + ":"
+            block.meta["rich_value"] = _clean(value)
+            blocks.append(block)
+            index += 1
+            continue
+
+        whole = _WHOLE_BOLD.match(line)
+        if whole:
+            flush_paragraph()
+            bold_text = _clean(whole.group(1))
+            if bold_text:
+                blocks.append(_make("provider_name", text=bold_text))
+            index += 1
+            continue
+
         labelled = _split_label(line)
         if labelled:
             flush_paragraph()
             label_type, value = labelled
             value = _clean(value)
             if value:
-                _emit_label(label_type, value, blocks)
+                _emit_label(label_type, line, blocks)
                 if label_type == "subtitle" and not subtitle:
                     subtitle = value
                 if label_type == "document_title":
@@ -297,23 +421,18 @@ def understand(
         level = _looks_like_heading(line)
         if level and not _NUMBERED.match(line):
             flush_paragraph()
-            block = _headline_block(_clean(line), level)
-            blocks.append(block)
-            if block.type == "document_title":
-                title = block.text
+            emit_heading(line, level)
             index += 1
             continue
 
         if _NUMBERED.match(line):
             flush_paragraph()
             if _looks_like_heading(line):
-                block = _headline_block(_clean(line), 2)
-                blocks.append(block)
-            else:
-                list_blocks, index = _parse_list(lines, index, numbered=True)
-                blocks.extend(list_blocks)
+                emit_heading(line, 2)
+                index += 1
                 continue
-            index += 1
+            list_blocks, index = _parse_list(lines, index, numbered=True)
+            blocks.extend(list_blocks)
             continue
 
         if classify.is_money(line):
@@ -343,14 +462,9 @@ def understand(
             continue
 
         lowered = line.lower()
-        if "signature" in lowered or "signed" in lowered or "accepted for and on behalf" in lowered:
+        if re.search(r"\bsign(?:ature|ed|ing)?\b", lowered) or "accepted for and on behalf" in lowered:
             flush_paragraph()
             blocks.append(_make("signature", text=_clean(line)))
-            index += 1
-            continue
-        if "acceptance" in lowered and len(line) < 90:
-            flush_paragraph()
-            blocks.append(_make("client_acceptance", text=_clean(line)))
             index += 1
             continue
 
@@ -372,6 +486,72 @@ def understand(
         source_kind=kind,
     )
     return refresh(understanding, profile, client)
+
+
+# ---------------------------------------------------------------------------
+# completeness
+# ---------------------------------------------------------------------------
+
+
+def _norm_for_check(text: str) -> str:
+    """The comparison key the completeness gate uses: case- and space-insensitive."""
+    return re.sub(r"[\s\u00ad\u2011\u2010\-]+", "", (text or "").lower())
+
+
+def _strip_markers(line: str) -> str:
+    line = re.sub(r"^\s*#{1,6}\s+", "", line.strip())
+    line = re.sub(r"^\s*(?:[-*•·‣▪◦○]|\d{1,3}[.)])\s+", "", line)
+    return line.strip()
+
+
+def _is_separator_cell(cell: str) -> bool:
+    stripped = cell.strip(" *")
+    return bool(stripped) and set(stripped) <= set("-: ")
+
+
+def source_candidates(text: str) -> list[str]:
+    """Every content-bearing candidate a source line must leave in the output.
+
+    A plain line yields one candidate; a Markdown table row yields one per cell,
+    so a dropped priced line is caught cell by cell.
+    """
+    candidates: list[str] = []
+    for raw in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped = raw.strip()
+        if not stripped or _MD_RULE.match(stripped) or _MD_TABLE_SEP.match(stripped):
+            continue
+        if stripped.startswith("|") and stripped.endswith("|") and "|" in stripped[1:-1]:
+            for cell in stripped.strip("|").split("|"):
+                if _is_separator_cell(cell):
+                    continue
+                cleaned = _clean(cell).strip(" *")
+                if cleaned:
+                    candidates.append(cleaned)
+            continue
+        value = _clean(_strip_markers(stripped))
+        if value:
+            candidates.append(value)
+    return candidates
+
+
+def verify_completeness(text: str, understanding: Understanding) -> list[str]:
+    """Return the source lines that did not reach a block.
+
+    The understanding stage is not allowed to drop content, so this is checked
+    rather than assumed: an AI refinement that silently swallowed a heading is a
+    failure the caller must see, not one to paper over.
+    """
+    haystack = " ".join(
+        [block.text for block in understanding.blocks]
+        + [item for block in understanding.blocks for item in block.items]
+    )
+    haystack = _norm_for_check(haystack)
+    missing: list[str] = []
+    for candidate in source_candidates(text):
+        key = _norm_for_check(candidate)
+        if key and key not in haystack:
+            missing.append(candidate)
+    return missing
 
 
 def _note_missing(understanding: Understanding, profile: BusinessProfile | None,
@@ -428,5 +608,5 @@ def _normalize_financial(block: SemanticBlock) -> None:
         value, figure = classify.extract_amount(source)
         block.value, block.figure = value, figure
         if value is not None and not block.items:
-            label = re.sub(re.escape(figure), "", block.text or "").strip(" .,:-")
+            label = re.sub(re.escape(figure), "", block.text or "").strip()
             block.items = [label or block.type.replace("_", " ").title(), figure]

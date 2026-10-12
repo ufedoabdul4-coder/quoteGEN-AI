@@ -95,22 +95,44 @@ def _draw_table_furniture(page: "pymupdf.Page", placements: list[FlowPlacement],
 def _draw_placement(page: "pymupdf.Page", pl: FlowPlacement, registry: FontRegistry) -> None:
     if not pl.lines:
         return
-    face = registry.resolve(pl.font, bold=pl.bold, italic=pl.italic)
-    name = registry.register(page, face)
+    face_r = registry.resolve(pl.font, bold=pl.bold, italic=pl.italic)
+    name_r = registry.register(page, face_r)
+    face_b = registry.resolve(pl.font, bold=True, italic=pl.italic)
+    name_b = registry.register(page, face_b)
     color = hex_rgb(pl.color)
     for i, line in enumerate(pl.lines):
         if not line:
             continue
-        safe = face.sanitize(line)
         y = pl.y + i * (pl.pitch or pl.size * 1.2)
-        width = face.text_length(safe, pl.size)
+        if pl.rich and i == 0:
+            label, rest = pl.rich
+            label_s = face_b.sanitize(label)
+            label_w = face_b.text_length(label_s, pl.size)
+            if pl.align in ("center", "right"):
+                full = face_r.sanitize(line)
+                width = face_r.text_length(full, pl.size)
+                if pl.align == "center":
+                    x = pl.x + max(0.0, (pl.width - width) / 2.0)
+                else:
+                    x = pl.x + max(0.0, pl.width - width)
+            else:
+                x = pl.x
+            page.insert_text((x, y), label_s, fontname=name_b, fontsize=pl.size, color=color)
+            if rest:
+                rest_s = " " + face_r.sanitize(rest)
+                page.insert_text((x + label_w, y), rest_s, fontname=name_r,
+                                 fontsize=pl.size, color=color)
+            continue
+        safe = face_r.sanitize(line)
+        y = pl.y + i * (pl.pitch or pl.size * 1.2)
+        width = face_r.text_length(safe, pl.size)
         if pl.align == "center":
             x = pl.x + max(0.0, (pl.width - width) / 2.0)
         elif pl.align == "right":
             x = pl.x + max(0.0, pl.width - width)
         else:
             x = pl.x
-        page.insert_text((x, y), safe, fontname=name, fontsize=pl.size, color=hex_rgb(pl.color))
+        page.insert_text((x, y), safe, fontname=name_r, fontsize=pl.size, color=color)
 
 
 def render_pdf_document(design: Design, blocks: list[FlowBlock], registry: FontRegistry,

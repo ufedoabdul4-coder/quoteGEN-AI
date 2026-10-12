@@ -110,14 +110,8 @@ def analyze_reference(pdf_bytes: bytes, *, name: str = "Reference design",
             9.0,
             12.5,
         )
-        heading_size = _clamp(
-            statistics.median(heading_sizes) if heading_sizes else body_size,
-            9.0,
-            16.0,
-        )
         title_y = min((span["bbox"][1] for span in spans), default=0.0)
         title_spans = [span for span in spans if abs(span["bbox"][1] - title_y) < 1.0]
-        title_size = statistics.median([span["size"] for span in title_spans]) if title_spans else heading_size
 
         body_colors = [s["color"] for s in body_spans]
         primary = _dominant(body_colors, dark=True)
@@ -178,9 +172,18 @@ def analyze_reference(pdf_bytes: bytes, *, name: str = "Reference design",
             font_body=body_family,
             font_heading=heading_family,
             body_size=body_size,
-            title_size=title_size,
-            heading_size=heading_size,
-            table_header_size=heading_size,
+            # The reference fixes the *body* size; every heading size is rebuilt
+            # as a multiplier of it so a smaller or larger master scales as one
+            # unit and never inherits a stray 22.8pt title from the sample.
+            title_size=None,
+            heading_size=None,
+            subheading_size=None,
+            subsubheading_size=None,
+            table_header_size=None,
+            title_scale=1.45,
+            heading_scale=14.6 / 12.0,
+            subheading_scale=13.0 / 12.0,
+            subsubheading_scale=13.0 / 12.0,
             title_bold=any(span["bold"] for span in title_spans),
             heading_bold=bool(heading_spans),
             table_header_bold=bool(heading_spans),
@@ -221,12 +224,8 @@ def prepare_template_background(
         )
 
         text_redactions: list[pymupdf.Rect] = []
-        for span in _collect_spans(source):
-            rect = pymupdf.Rect(span["bbox"])
-            padded = rect + (-0.9, -0.9, 0.9, 0.9)
-            padded.y1 = min(padded.y1, cleanup_bottom)
-            if padded.y1 > padded.y0:
-                text_redactions.append(padded)
+        for rect in _all_text_rects(source, cleanup_bottom):
+            text_redactions.append(rect)
         band_top = min(content_top, cleanup_bottom)
         band_rect = pymupdf.Rect(0, band_top, source.rect.width, cleanup_bottom)
         drawing_redactions = _body_drawing_rects(source, band_rect, cleanup_bottom)
@@ -278,6 +277,26 @@ def prepare_template_background(
             out.close()
     finally:
         source_doc.close()
+
+
+def _all_text_rects(page: "pymupdf.Page", cleanup_bottom: float) -> list[pymupdf.Rect]:
+    """Rects for every text span, *including* whitespace-only spans.
+
+    A flattened master keeps an invisible text layer above its raster. The
+    spaces in that layer carry no glyphs, but PDF text extractors still read
+    them back and inject stray spaces into the output, so they are removed
+    alongside the visible words. Only text is touched; the raster is untouched.
+    """
+    rects: list[pymupdf.Rect] = []
+    for block in page.get_text("dict").get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                rect = pymupdf.Rect(span.get("bbox", (0, 0, 0, 0)))
+                padded = rect + (-0.9, -0.9, 0.9, 0.9)
+                padded.y1 = min(padded.y1, cleanup_bottom)
+                if padded.width > 0 and padded.y1 > padded.y0:
+                    rects.append(padded)
+    return rects
 
 
 def pick_design_page(doc: "pymupdf.Document") -> int:

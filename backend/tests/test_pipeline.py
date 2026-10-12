@@ -98,6 +98,91 @@ class UnderstandingTests(unittest.TestCase):
         )
 
 
+class FidelityTests(unittest.TestCase):
+    """Source words and case survive; headings and totals are never dropped."""
+
+    SAMPLE = """# PROPOSAL FOR DEEP CLEANING
+
+## SUBMITTED BY
+
+# KAMIBRIX LIMITED
+
+# 1. INTRODUCTION
+
+We are pleased to submit this proposal.
+
+## A. MAIN RESIDENTIAL BUILDING
+
+### 1. Sitting Room and Toilet
+
+* Wet cleaning of all surfaces
+
+## Fumigation Treatment Includes:
+
+* Cockroach control
+
+| Description | Amount |
+|---|---|
+| Deep cleaning | 750,000 |
+| GRAND TOTAL | 750,000 |
+
+# GRAND TOTAL: \u20a6750,000
+
+### Amount in Words: Seven Hundred and Fifty Thousand Naira Only.
+
+# PREPARED BY
+
+Name: ____________
+
+# CLIENT ACCEPTANCE
+
+Signature: ____________
+"""
+
+    def setUp(self):
+        self.result = understanding.understand(self.SAMPLE)
+
+    def test_title_and_headings_keep_exact_case(self):
+        texts = [b.text for b in self.result.blocks]
+        self.assertIn("PROPOSAL FOR DEEP CLEANING", texts)
+        self.assertIn("SUBMITTED BY", texts)
+        self.assertIn("1. INTRODUCTION", texts)
+        self.assertIn("GRAND TOTAL: \u20a6750,000", texts)
+        self.assertIn("Amount in Words: Seven Hundred and Fifty Thousand Naira Only.", texts)
+
+    def test_headings_carry_their_level(self):
+        headings = {(b.text, b.level) for b in self.result.blocks if b.type == "heading"}
+        self.assertIn(("SUBMITTED BY", 2), headings)
+        self.assertIn(("1. INTRODUCTION", 1), headings)
+        self.assertIn(("A. MAIN RESIDENTIAL BUILDING", 2), headings)
+        self.assertIn(("1. Sitting Room and Toilet", 3), headings)
+
+    def test_separate_total_line_is_kept(self):
+        totals = [b.value for b in self.result.blocks if b.type == "grand_total"]
+        self.assertIn(750000.0, totals)
+
+    def test_amount_in_words_keeps_its_label(self):
+        words = [b.text for b in self.result.blocks if b.type == "amount_in_words"]
+        self.assertTrue(any(t.startswith("Amount in Words:") for t in words))
+
+    def test_no_invented_labels(self):
+        blob = " ".join(b.text for b in self.result.blocks)
+        self.assertNotIn("Prepared for:", blob)
+
+    def test_every_source_line_reaches_a_block(self):
+        self.assertEqual(understanding.verify_completeness(self.SAMPLE, self.result), [])
+
+    def test_mapping_gives_signature_sections_a_group(self):
+        flow = mapping.to_flow_blocks(self.result)
+        grouped = {b.text for b in flow if b.group and b.text in ("PREPARED BY", "CLIENT ACCEPTANCE")}
+        self.assertEqual(grouped, {"PREPARED BY", "CLIENT ACCEPTANCE"})
+
+    def test_subheadings_map_to_subsubheading(self):
+        flow = mapping.to_flow_blocks(self.result)
+        kinds = {(b.type, b.text) for b in flow}
+        self.assertIn(("subsubheading", "1. Sitting Room and Toilet"), kinds)
+
+
 class MismatchTests(unittest.TestCase):
     def test_bad_total_is_flagged_not_corrected(self):
         text = SAMPLE.replace("| Grand Total | 400,000 |", "| Grand Total | 425,000 |")
@@ -290,15 +375,18 @@ class ReferenceStyleTests(unittest.TestCase):
         design = reference.analyze_reference(master_bytes)
         styles = design.styles(FontRegistry())
         self.assertEqual(design.body_size, 12)
-        self.assertEqual(design.heading_size, 12)
-        self.assertEqual(design.title_size, 12)
+        self.assertIsNone(design.heading_size)
+        self.assertIsNone(design.title_size)
         self.assertEqual(design.title_align, "center")
         self.assertEqual(design.font_body, "Times New Roman")
         self.assertEqual(design.font_heading, "Times New Roman")
         self.assertTrue(styles.title.bold)
         self.assertTrue(styles.heading.bold)
         self.assertFalse(styles.body.bold)
-        self.assertEqual(styles.heading.size, 12)
+        self.assertEqual(styles.title.size, 17.4)
+        self.assertAlmostEqual(styles.heading.size, 14.6, places=2)
+        self.assertEqual(styles.subheading.size, 13.0)
+        self.assertEqual(styles.subsubheading.size, 13.0)
         self.assertEqual(styles.body.size, 12)
 
     def test_reference_tables_render_as_unfilled_bordered_grids(self):

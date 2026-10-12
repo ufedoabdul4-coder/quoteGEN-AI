@@ -12,6 +12,8 @@ own tiny table.
 
 from __future__ import annotations
 
+import re
+
 from models import BusinessProfile, ClientInfo, SemanticBlock, Understanding
 from services.flow import FlowBlock, TableSpec
 
@@ -19,11 +21,35 @@ _PRICED = {"table_header", "table_row", "subtotal", "grand_total", "cost_amount"
 
 _BULLET_TYPES = {"bullet_list", "scope_item", "equipment_item", "material_item", "safety_item"}
 
+_HEADING_TYPES = {"heading", "major_section_heading", "subsection_heading"}
 
-def _meta_line(label: str, value: str) -> str:
-    if value.lower().startswith(label.lower()):
-        return value
-    return f"{label}: {value}"
+#: A heading with one of these labels opens a signature-style section whose whole
+#: body (heading included) is kept on one page by the layout engine.
+_SIGNATURE_HEADINGS = {
+    "prepared by", "prepared", "client acceptance", "acceptance",
+    "signature", "signatures", "submitted by", "submitted",
+    "signed by", "authorised by", "authorized by",
+}
+
+
+def _signature_label(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower()).rstrip(":")
+
+
+def _flow_heading(kind: str, text: str, level: int, group: str) -> FlowBlock:
+    if kind == "document_title":
+        return FlowBlock("title", text=text, level=1, group=group)
+    if kind == "major_section_heading":
+        level = 1
+    elif kind == "subsection_heading":
+        level = 2
+    elif _signature_label(text) in _SIGNATURE_HEADINGS:
+        # SUBMITTED BY / PREPARED BY / CLIENT ACCEPTANCE are subsection-level,
+        # whatever their Markdown marker says, so they match the mobile output.
+        level = 2
+    depth = min(max(int(level or 1), 1), 3)
+    flow_type = {1: "heading", 2: "subheading", 3: "subsubheading"}[depth]
+    return FlowBlock(flow_type, text=text, level=depth, group=group)
 
 
 def _table_from(group: list[SemanticBlock]) -> FlowBlock:
@@ -63,19 +89,60 @@ def to_flow_blocks(understanding: Understanding, profile: BusinessProfile | None
     blocks = understanding.blocks
     flow: list[FlowBlock] = []
     index = 0
+    current_group = ""
 
     while index < len(blocks):
         block = blocks[index]
 
         if block.type in _PRICED:
-            group: list[SemanticBlock] = []
-            while index < len(blocks) and blocks[index].type in _PRICED:
-                group.append(blocks[index])
+            # A total that stands alone (not inside a Markdown table, so its own
+            # text, not a cell) is NOT a table row: it must render as its own
+            # bold line directly under the table, grouped with the words that
+            # spell it out, instead of becoming a duplicate row in the grid.
+            if block.type in ("subtotal", "grand_total") and not (block.group or ""):
+                fin_group = "fin_" + re.sub(r"\W+", "_", (block.text or block.type).lower())[:48]
+                flow.append(_map_single(block, group=fin_group))
                 index += 1
-            flow.append(_table_from(group))
+                while index < len(blocks) and blocks[index].type == "amount_in_words":
+                    flow.append(_map_single(blocks[index], group=fin_group))
+                    index += 1
+                continue
+            table_group: list[SemanticBlock] = []
+            while index < len(blocks) and blocks[index].type in _PRICED:
+                current_b = blocks[index]
+                if current_b.type in ("subtotal", "grand_total") and not (current_b.group or ""):
+                    break
+                table_group.append(current_b)
+                index += 1
+            if table_group:
+                flow.append(_table_from(table_group))
+            if index < len(blocks) and blocks[index].type in ("subtotal", "grand_total") and not (blocks[index].group or ""):
+                fin_group = "fin_" + re.sub(r"\W+", "_", (blocks[index].text or blocks[index].type).lower())[:48]
+                flow.append(_map_single(blocks[index], group=fin_group))
+                index += 1
+                while index < len(blocks) and blocks[index].type == "amount_in_words":
+                    flow.append(_map_single(blocks[index], group=fin_group))
+                    index += 1
+                continue
+            if table_group:
+                continue
+            # If we broke on a standalone total, the logic above should have handled it;
+            # otherwise just consume this priced block as-is.
+            mapped = _map_single(block, group=current_group)
+            if mapped is not None:
+                flow.append(mapped)
+            index += 1
             continue
 
-        mapped = _map_single(block)
+        if block.type in _HEADING_TYPES or block.type == "document_title":
+            if _signature_label(block.text) in _SIGNATURE_HEADINGS:
+                # A signature section owns every block until the next one, so the
+                # whole PREPARED BY / CLIENT ACCEPTANCE run is kept on one page.
+                current_group = "sig_" + re.sub(r"\W+", "_", _signature_label(block.text))
+        elif block.type in ("signature", "client_acceptance") and not current_group:
+            current_group = "sig_" + str(block.type)
+
+        mapped = _map_single(block, group=current_group)
         if mapped is not None:
             flow.append(mapped)
         index += 1
@@ -83,46 +150,43 @@ def to_flow_blocks(understanding: Understanding, profile: BusinessProfile | None
     return flow
 
 
-def _map_single(block: SemanticBlock) -> FlowBlock | None:
+def _map_single(block: SemanticBlock, group: str = "") -> FlowBlock | None:
     kind = block.type
     text = block.text or ""
 
-    if kind == "document_title":
-        return FlowBlock("title", text=text)
+    def rich(flow: FlowBlock) -> FlowBlock:
+        meta = block.meta or {}
+        if meta.get("label"):
+            flow.label = meta["label"]
+            flow.rich_value = meta.get("rich_value", "")
+        return flow
+
+    if kind in _HEADING_TYPES or kind == "document_title":
+        return _flow_heading(kind, text, block.level, group)
     if kind == "subtitle":
-        return FlowBlock("subtitle", text=text)
-    if kind == "major_section_heading":
-        return FlowBlock("heading", text=text)
-    if kind == "subsection_heading":
-        return FlowBlock("subheading", text=text)
+        return FlowBlock("subtitle", text=text, group=group)
     if kind in _BULLET_TYPES:
         items = block.items or [text]
-        return FlowBlock("bullet_list", text="\n".join(items))
+        return FlowBlock("bullet_list", text="\n".join(items), group=group)
     if kind == "numbered_list":
-        return FlowBlock("numbered_list", text="\n".join(block.items or [text]))
-    if kind in ("client_name",):
-        return FlowBlock("contact_information", text=_meta_line("Prepared for", text))
-    if kind in ("client_address", "service_address"):
-        return FlowBlock("contact_information", text=_meta_line("Address", text))
-    if kind == "quotation_number":
-        return FlowBlock("contact_information", text=_meta_line("Quotation No", text))
-    if kind == "quotation_date":
-        return FlowBlock("contact_information", text=_meta_line("Date", text))
-    if kind == "validity_period":
-        return FlowBlock("contact_information", text=_meta_line("Valid until", text))
-    if kind in ("contact_information",):
-        return FlowBlock("contact_information", text=text)
+        return FlowBlock("numbered_list", text="\n".join(block.items or [text]), group=group)
+    if kind in ("subtotal", "grand_total"):
+        return rich(FlowBlock(kind, text=text, group=group))
+    if kind in ("client_name", "client_address", "service_address", "contact_information",
+                "quotation_number", "quotation_date", "validity_period"):
+        return rich(FlowBlock("contact_information", text=text, group=group))
     if kind == "amount_in_words":
-        return FlowBlock("paragraph", text=text)
-    if kind in ("duration", "term", "introduction", "paragraph", "provider_name"):
-        return FlowBlock("paragraph", text=text)
-    if kind in ("signature",):
-        return FlowBlock("signature", text=text or "Signature: ______________________")
-    if kind == "client_acceptance":
-        return FlowBlock("signature", text=text)
+        return FlowBlock("paragraph", text=text, group=group)
+    if kind == "provider_name":
+        return FlowBlock("provider_name", text=text, group=group)
+    if kind in ("duration", "term", "introduction", "paragraph"):
+        return FlowBlock("paragraph", text=text, group=group)
+    if kind in ("signature", "client_acceptance"):
+        fallback = text or "Signature: ______________________"
+        return rich(FlowBlock("signature", text=fallback, group=group))
     if kind == "cost_amount":
-        return FlowBlock("paragraph", text=text)
-    return FlowBlock("paragraph", text=text)
+        return FlowBlock("paragraph", text=text, group=group)
+    return FlowBlock("paragraph", text=text, group=group)
 
 
 def expand_lists(blocks: list[FlowBlock], styles=None) -> list[FlowBlock]:
