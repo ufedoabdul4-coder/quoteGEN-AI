@@ -13,7 +13,7 @@ export type Route = 'overview' | 'documents' | 'create' | 'templates' | 'profile
 const NAV_ITEMS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard, group: 'Overview' },
   { id: 'documents', label: 'My documents', icon: FileText, group: 'Overview' },
-  { id: 'create', label: 'Create quotation', icon: CirclePlus, group: 'Create' },
+  { id: 'create', label: 'Create proposal', icon: CirclePlus, group: 'Create' },
   { id: 'templates', label: 'Master templates', icon: FileStack, group: 'Create' },
   { id: 'profile', label: 'Business profile', icon: Building, group: 'Account' },
 ] as const;
@@ -40,7 +40,7 @@ export function Sidebar({
           <span className="text-lg font-semibold tracking-tight">quoteGEN</span>
           <span className="chip chip-gold">AI</span>
         </div>
-        <p className="text-xs text-[var(--text-dim)] mt-1">Premium quotation studio</p>
+        <p className="text-xs text-[var(--text-dim)] mt-1">Premium proposal studio</p>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">

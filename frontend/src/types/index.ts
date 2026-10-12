@@ -103,7 +103,7 @@ export interface UnderstandResponse {
 export interface JobDraftRequest {
   job_description: string;
   quotation_goal: string;
-  budget_ngn: number;
+  target_total_ngn: number;
   profile: BusinessProfile;
   client: ClientInfo;
 }
@@ -112,7 +112,7 @@ export interface JobDraftResponse {
   quotation_text: string;
   understanding: Understanding;
   missing_info: string[];
-  budget_ngn: number;
+  target_total_ngn: number;
   suggested_total_ngn: number;
   model: string;
   notice: string;

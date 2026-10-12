@@ -157,11 +157,14 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(body["understanding"]["blocks"])
 
     def test_job_draft_requires_gemini_configuration(self):
-        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+        with (
+            mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}),
+            mock.patch.object(main.job_draft, "active_master_reference", return_value="Master proposal reference"),
+        ):
             response = self.client.post("/job-draft", json={
                 "job_description": "Three bedrooms and a kitchen",
                 "quotation_goal": "A complete deep cleaning quotation",
-                "budget_ngn": 850000,
+                "target_total_ngn": 850000,
             })
 
         self.assertEqual(response.status_code, 503)
@@ -171,10 +174,26 @@ class ApiTests(unittest.TestCase):
         response = self.client.post("/job-draft", json={
             "job_description": "Three bedrooms and a kitchen",
             "quotation_goal": "A complete deep cleaning quotation",
-            "budget_ngn": 0,
+            "target_total_ngn": 0,
         })
 
         self.assertEqual(response.status_code, 422)
+
+    def test_job_draft_requires_active_master_proposal(self):
+        with mock.patch.object(
+            main.job_draft, "active_master_reference",
+            side_effect=main.job_draft.JobDraftError(
+                "Select the active master proposal.", status_code=409,
+            ),
+        ):
+            response = self.client.post("/job-draft", json={
+                "job_description": "Three bedrooms and a kitchen",
+                "quotation_goal": "A detailed cleaning proposal",
+                "target_total_ngn": 850000,
+            })
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("active master proposal", response.json()["detail"])
 
     def test_job_draft_returns_parser_ready_quotation(self):
         from models import BusinessProfile, ClientInfo
@@ -199,19 +218,22 @@ class ApiTests(unittest.TestCase):
                 quotation, profile=BusinessProfile(), client=ClientInfo(),
             ),
             "missing_info": [],
-            "budget_ngn": 850000,
+            "target_total_ngn": 500000,
             "suggested_total_ngn": 500000,
             "model": "test-model",
             "notice": "Review prices before sending.",
         }
 
-        with mock.patch.object(
-            main.job_draft, "draft_quotation", new=mock.AsyncMock(return_value=result),
+        with (
+            mock.patch.object(main.job_draft, "active_master_reference", return_value="Master proposal reference"),
+            mock.patch.object(
+                main.job_draft, "draft_quotation", new=mock.AsyncMock(return_value=result),
+            ),
         ):
             response = self.client.post("/job-draft", json={
                 "job_description": "Clean bedrooms",
                 "quotation_goal": "Deep cleaning",
-                "budget_ngn": 850000,
+                "target_total_ngn": 500000,
             })
 
         self.assertEqual(response.status_code, 200, response.text)

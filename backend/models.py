@@ -306,7 +306,7 @@ class UnderstandResponse(BaseModel):
 class JobDraftRequest(BaseModel):
     job_description: str = Field(min_length=1, max_length=10000)
     quotation_goal: str = Field(min_length=1, max_length=2000)
-    budget_ngn: int = Field(gt=0, le=999999999999, strict=True)
+    target_total_ngn: int = Field(gt=0, le=999999999999, strict=True)
     profile: BusinessProfile = Field(default_factory=BusinessProfile)
     client: ClientInfo = Field(default_factory=ClientInfo)
 
@@ -323,7 +323,7 @@ class JobDraftResponse(BaseModel):
     quotation_text: str
     understanding: Understanding
     missing_info: List[str] = Field(default_factory=list)
-    budget_ngn: int
+    target_total_ngn: int
     suggested_total_ngn: int
     model: str
     notice: str

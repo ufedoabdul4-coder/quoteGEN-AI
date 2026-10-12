@@ -72,14 +72,14 @@ export function CreateQuotation({
   );
   const [jobDescription, setJobDescription] = useState('');
   const [quotationGoal, setQuotationGoal] = useState('');
-  const [budgetNgn, setBudgetNgn] = useState('');
+  const [targetTotalNgn, setTargetTotalNgn] = useState('');
   const [jobMissingInfo, setJobMissingInfo] = useState<string[]>(
     initialDocument?.job_missing_info ?? [],
   );
-  const [jobTotals, setJobTotals] = useState<{ total: number; budget: number } | null>(null);
+  const [jobTotals, setJobTotals] = useState<{ total: number; target: number } | null>(null);
   const [jobEstimateNotice, setJobEstimateNotice] = useState(
     initialDocument?.input_kind === 'job'
-      ? 'This quotation contains AI-generated price allocations. Review each line against your approved rates before sending.'
+      ? 'This proposal contains AI-estimated prices. Review each line against your approved rates before sending.'
       : '',
   );
   const client: ClientInfo = initialDocument?.client
@@ -141,9 +141,10 @@ export function CreateQuotation({
   };
 
   const generateFromJob = async () => {
-    const budget = Number(budgetNgn);
-    if (!jobDescription.trim() || !quotationGoal.trim() || !Number.isSafeInteger(budget) || budget <= 0) {
-      setError('Enter the job description, quotation objective, and a valid maximum budget in Naira.');
+    const targetTotal = Number(targetTotalNgn);
+    if (!jobDescription.trim() || !quotationGoal.trim()
+      || !Number.isSafeInteger(targetTotal) || targetTotal <= 0) {
+      setError('Enter the job description, quotation objective, and a valid proposal total in Naira.');
       return;
     }
     setBusy('draft');
@@ -153,14 +154,14 @@ export function CreateQuotation({
       const draft = await api.draftJobQuotation({
         job_description: jobDescription.trim(),
         quotation_goal: quotationGoal.trim(),
-        budget_ngn: budget,
+        target_total_ngn: targetTotal,
         profile,
         client,
       });
       setText(draft.quotation_text);
       setGeneratedFromJob(true);
       setJobMissingInfo(draft.missing_info);
-      setJobTotals({ total: draft.suggested_total_ngn, budget: draft.budget_ngn });
+      setJobTotals({ total: draft.suggested_total_ngn, target: draft.target_total_ngn });
       setJobEstimateNotice(draft.notice);
       setEngine({ usedAi: true, model: draft.model });
       setUnderstanding(draft.understanding);
@@ -252,21 +253,21 @@ export function CreateQuotation({
         <div className="card p-4 sm:p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-lg font-semibold">Create a quotation</h1>
+              <h1 className="text-lg font-semibold">Create a proposal</h1>
               <p className="text-xs text-[var(--text-muted)]">
-                Add the quotation content. It will be placed in your master template.
+                Build a detailed, client-ready proposal using your master document.
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2" role="group" aria-label="Quotation input mode">
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Proposal input mode">
             <button
               type="button"
               className={`btn ${inputMode === 'paste' ? 'btn-primary' : ''}`}
               onClick={() => setInputMode('paste')}
               disabled={Boolean(busy)}
             >
-              Write a quotation
+              Write a proposal
             </button>
             <button
               type="button"
@@ -308,8 +309,8 @@ export function CreateQuotation({
               <div>
                 <h2 className="font-semibold">You’ve reached your free generation limit</h2>
                 <p className="text-sm text-[var(--text-muted)] mt-1">
-                  The free plan allows 10 quotations in any rolling 30 days, with up to 3 per UTC day.
-                  Get unlimited quotations for one month for{' '}
+                  The free plan allows 10 proposals in any rolling 30 days, with up to 3 per UTC day.
+                  Get unlimited proposals for one month for{' '}
                   {monthlyPrice === null ? '₦13,310' : `₦${monthlyPrice.toLocaleString('en-NG')}`}.
                   This is a one-time monthly payment; it does not auto-renew.
                 </p>
@@ -332,7 +333,7 @@ export function CreateQuotation({
           {draftUnderstanding ? (
             <div className="space-y-3">
               <div className="panel p-3">
-                <h2 className="text-sm font-semibold">Edit quotation content</h2>
+                <h2 className="text-sm font-semibold">Edit proposal content</h2>
                 <p className="text-xs text-[var(--text-muted)] mt-1">
                   Change, remove, or reorder content, then regenerate. Your master design is preserved.
                 </p>
@@ -377,7 +378,7 @@ export function CreateQuotation({
               </div>
               <div>
                 <label htmlFor="quotation-goal" className="label">
-                  What should the quotation cover?
+                  What should the proposal cover?
                 </label>
                 <textarea
                   id="quotation-goal"
@@ -391,7 +392,7 @@ export function CreateQuotation({
                 />
               </div>
               <div>
-                <label htmlFor="job-budget" className="label">Approved maximum budget (₦)</label>
+                <label htmlFor="job-budget" className="label">Target proposal total (₦)</label>
                 <input
                   id="job-budget"
                   className="input"
@@ -400,13 +401,13 @@ export function CreateQuotation({
                   max="999999999999"
                   step="1"
                   inputMode="numeric"
-                  value={budgetNgn}
-                  onChange={(e) => setBudgetNgn(e.target.value)}
+                  value={targetTotalNgn}
+                  onChange={(e) => setTargetTotalNgn(e.target.value)}
                   placeholder="850000"
                   disabled={Boolean(busy)}
                 />
                 <p className="mt-1 text-xs text-[var(--text-muted)]">
-                  The AI will suggest a cost breakdown that does not exceed this amount. Check all rates before sending.
+                  The proposal will total this amount. AI-allocated prices are estimates; review them against your approved rates before sending.
                 </p>
               </div>
               {jobEstimateNotice && (
@@ -414,8 +415,7 @@ export function CreateQuotation({
               )}
               {jobTotals && (
                 <div className="panel p-3 text-xs" role="status">
-                  Suggested total: <strong>₦{jobTotals.total.toLocaleString('en-NG')}</strong>
-                  {' '}of approved maximum ₦{jobTotals.budget.toLocaleString('en-NG')}.
+                  Proposal total: <strong>₦{jobTotals.total.toLocaleString('en-NG')}</strong>
                 </div>
               )}
               {jobMissingInfo.length > 0 && (
@@ -435,10 +435,10 @@ export function CreateQuotation({
                 {busy
                   ? <LoaderCircle size={15} className="spin" />
                   : <Sparkles size={15} />}
-                {busy === 'draft' ? 'Drafting quotation…'
-                  : busy === 'understand' ? 'Preparing quotation…'
+                {busy === 'draft' ? 'Drafting proposal…'
+                  : busy === 'understand' ? 'Preparing proposal…'
                     : busy === 'generate' ? 'Generating document…'
-                      : pdfUrl ? 'Draft again & generate' : 'Draft & generate quotation'}
+                      : pdfUrl ? 'Draft again & generate' : 'Draft & generate proposal'}
               </button>
               {engine?.usedAi && (
                 <p className="text-xs text-[var(--text-muted)]">Drafted by {engine.model || 'AI'}</p>
@@ -450,7 +450,7 @@ export function CreateQuotation({
                 className="textarea"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder="Paste or write the quotation exactly as it should read, including its details, line items, prices and terms…"
+                placeholder="Paste or write the proposal exactly as it should read, including its details, line items, prices and terms…"
                 style={{ minHeight: 280 }}
               />
               <div className="flex items-center gap-2">
@@ -490,7 +490,7 @@ export function CreateQuotation({
         <div className="flex-1 min-h-0">
           <PreviewPane pages={pages} pdfUrl={pdfUrl || undefined}
             title={understanding?.title}
-            emptyHint="Add the quotation details, then generate the document to see it here." />
+            emptyHint="Add the proposal details, then generate the document to see it here." />
         </div>
         <div className="space-y-3">
           <div className="flex items-center gap-2">

@@ -33,11 +33,11 @@ export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) 
         <div>
           <h1 className="text-lg font-semibold">My documents</h1>
           <p className="text-xs text-[var(--text-muted)]">
-            {documents.length} saved quotation{documents.length === 1 ? '' : 's'}
+            {documents.length} saved proposal{documents.length === 1 ? '' : 's'}
           </p>
         </div>
         <button type="button" className="btn btn-primary" onClick={onCreate}>
-          New quotation
+          New proposal
         </button>
       </header>
       {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
@@ -45,7 +45,7 @@ export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) 
       {documents.length === 0 ? (
         <div className="card p-10 text-center text-[var(--text-dim)] space-y-2">
           <FileText size={28} className="mx-auto" />
-          <p className="text-sm">No documents yet. Create your first quotation to see it here.</p>
+          <p className="text-sm">No documents yet. Create your first proposal to see it here.</p>
         </div>
       ) : (
         <div className="card divide-y divide-[var(--border)] overflow-hidden">
@@ -67,7 +67,7 @@ export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) 
                   <StatusIcon size={12} /> {status.label}
                 </span>
                 <button type="button" className="btn px-2 py-1"
-                  onClick={() => onOpen(doc.id)} aria-label="Edit quotation">
+                  onClick={() => onOpen(doc.id)} aria-label="Edit proposal">
                   <Pencil size={14} />
                 </button>
                 {doc.pdf_url && (

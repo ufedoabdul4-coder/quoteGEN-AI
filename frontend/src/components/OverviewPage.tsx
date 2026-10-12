@@ -35,11 +35,11 @@ export function OverviewPage({
         <div>
           <h1 className="text-lg font-semibold">Overview</h1>
           <p className="text-xs text-[var(--text-muted)]">
-            Turn your quotation content into a document using your master template.
+            Turn a job brief into a detailed, priced proposal using your master template.
           </p>
         </div>
         <button type="button" className="btn btn-primary" onClick={onCreate}>
-          <Sparkles size={15} /> New quotation
+          <Sparkles size={15} /> New proposal
         </button>
       </header>
       {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
@@ -62,7 +62,7 @@ export function OverviewPage({
         </div>
         {recent.length === 0 ? (
           <div className="px-4 py-10 text-center text-sm text-[var(--text-dim)]">
-            Nothing here yet. Your saved quotations will appear in this list.
+            Nothing here yet. Your saved proposals will appear in this list.
           </div>
         ) : (
           <div className="divide-y divide-[var(--border)]">

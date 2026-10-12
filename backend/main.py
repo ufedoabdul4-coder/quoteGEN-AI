@@ -144,16 +144,17 @@ async def understand(req: UnderstandRequest):
 @app.post("/job-draft", response_model=JobDraftResponse)
 async def draft_job_quotation(req: JobDraftRequest):
     try:
+        master_reference = job_draft.active_master_reference()
         return await job_draft.draft_quotation(
             job_description=req.job_description,
             quotation_goal=req.quotation_goal,
-            budget_ngn=req.budget_ngn,
+            target_total_ngn=req.target_total_ngn,
             profile=req.profile,
             client=req.client,
+            master_reference=master_reference,
         )
     except job_draft.JobDraftError as exc:
-        status_code = 503 if "GEMINI_API_KEY is not configured" in str(exc) else 502
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 # -- rendering ---------------------------------------------------------------
