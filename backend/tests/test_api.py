@@ -158,7 +158,13 @@ class ApiTests(unittest.TestCase):
 
     def test_job_draft_requires_gemini_configuration(self):
         with (
-            mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}),
+            mock.patch.dict(os.environ, {
+                "GEMINI_API_KEY": "",
+                "GROQ_API_KEY": "",
+                "GROQ_MODEL": "",
+                "OPENROUTER_API_KEY": "",
+                "OPENROUTER_MODEL": "",
+            }),
             mock.patch.object(main.job_draft, "active_master_reference", return_value="Master proposal reference"),
         ):
             response = self.client.post("/job-draft", json={
@@ -194,6 +200,32 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 429)
         self.assertIn("Try again in about 60 seconds", response.json()["detail"])
+        self.assertIn("job details are still in the form", response.json()["detail"])
+
+    def test_job_draft_preserves_provider_unavailable_response(self):
+        with (
+            mock.patch.object(
+                main.job_draft, "active_master_reference",
+                return_value="Master proposal reference",
+            ),
+            mock.patch.object(
+                main.job_draft,
+                "draft_quotation",
+                new=mock.AsyncMock(side_effect=main.job_draft.JobDraftError(
+                    "All configured AI providers are temporarily unavailable (HTTP 503). "
+                    "Gemini is overloaded. Your entered job details are still in the form.",
+                    status_code=503,
+                )),
+            ),
+        ):
+            response = self.client.post("/job-draft", json={
+                "job_description": "Three bedrooms and a kitchen",
+                "quotation_goal": "A detailed cleaning proposal",
+                "target_total_ngn": 850000,
+            })
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("All configured AI providers are temporarily unavailable", response.json()["detail"])
         self.assertIn("job details are still in the form", response.json()["detail"])
 
     def test_job_draft_rejects_nonpositive_budget(self):

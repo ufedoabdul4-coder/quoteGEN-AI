@@ -20,8 +20,8 @@ from services import classify, store, understanding as deterministic
 
 logger = logging.getLogger(__name__)
 
-_MODELS = ("gemini-3.8-flash", "gemini-flash-latest")
-_MAX_AUTOMATIC_429_WAIT_SECONDS = 3.0
+_DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+_MAX_AUTOMATIC_RETRY_WAIT_SECONDS = 3.0
 _CLEANING_TYPE_LABELS = {
     "residential_deep_cleaning": "Residential deep cleaning",
     "regular_house_cleaning": "Regular house cleaning",
@@ -33,6 +33,8 @@ _CLEANING_TYPE_LABELS = {
     "fumigation_pest_control": "Fumigation or pest control",
 }
 _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+_GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+_OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 _NOTICE = (
     "This is an AI-drafted proposal. Price lines are estimates, not approved rates; "
     "review the scope, terms, and prices before sending."
@@ -475,14 +477,24 @@ def _build_quotation(
     return "\n".join(lines), missing_info, total
 
 
-def _response_text(response: httpx.Response) -> dict:
+def _response_text(response: httpx.Response, *, provider: str = "Gemini") -> dict:
     try:
-        raw = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        payload = response.json()
+        if provider == "Gemini":
+            raw = payload["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            raw = payload["choices"][0]["message"]["content"]
+            if isinstance(raw, list):
+                raw = "".join(
+                    part.get("text", "") for part in raw if isinstance(part, dict)
+                )
         data = json.loads(raw)
     except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise JobDraftError("The AI service returned an unreadable draft.") from exc
+        raise JobDraftError(
+            f"{provider} returned an unreadable draft.",
+        ) from exc
     if not isinstance(data, dict):
-        raise JobDraftError("The AI service returned an unreadable draft.")
+        raise JobDraftError(f"{provider} returned an unreadable draft.")
     return data
 
 
@@ -537,14 +549,88 @@ def _provider_retry_after_seconds(response: httpx.Response) -> float | None:
     return None
 
 
-def _transport_error_message(exc: httpx.HTTPError) -> str:
+def _transport_error_message(provider: str, exc: httpx.HTTPError) -> str:
     error_type = type(exc).__name__
     if isinstance(exc, httpx.TimeoutException):
-        return f"Gemini request timed out ({error_type})."
+        return f"{provider} request timed out ({error_type})."
     detail = re.sub(r"\s+", " ", str(exc)).strip()
     return (
-        f"Could not complete the Gemini request ({error_type}): {detail}"
-        if detail else f"Could not complete the Gemini request ({error_type})."
+        f"Could not complete the {provider} request ({error_type}): {detail}"
+        if detail else f"Could not complete the {provider} request ({error_type})."
+    )
+
+
+def _configured_providers() -> tuple[list[tuple[str, str, str]], list[str]]:
+    providers: list[tuple[str, str, str]] = []
+    configuration_issues: list[str] = []
+
+    gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if gemini_key:
+        providers.append((
+            "Gemini",
+            (os.getenv("GEMINI_MODEL") or _DEFAULT_GEMINI_MODEL).strip(),
+            gemini_key,
+        ))
+
+    groq_key = (os.getenv("GROQ_API_KEY") or "").strip()
+    if groq_key:
+        groq_model = (os.getenv("GROQ_MODEL") or "").strip()
+        if groq_model:
+            providers.append(("GroqCloud", groq_model, groq_key))
+        else:
+            configuration_issues.append(
+                "GROQ_API_KEY is set but GROQ_MODEL is missing."
+            )
+
+    openrouter_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if openrouter_key:
+        openrouter_model = (os.getenv("OPENROUTER_MODEL") or "").strip()
+        if openrouter_model:
+            providers.append(("OpenRouter", openrouter_model, openrouter_key))
+        else:
+            configuration_issues.append(
+                "OPENROUTER_API_KEY is set but OPENROUTER_MODEL is missing."
+            )
+
+    if configuration_issues:
+        logger.warning("AI provider configuration issue: %s", "; ".join(configuration_issues))
+
+    return providers, configuration_issues
+
+
+def _provider_request(
+    provider: str,
+    model: str,
+    api_key: str,
+    prompt: str,
+    cleaning_type: str,
+) -> tuple[str, dict, dict]:
+    if provider == "Gemini":
+        return (
+            _ENDPOINT.format(model=model),
+            {"x-goog-api-key": api_key},
+            {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "responseMimeType": "application/json",
+                    "responseSchema": _generation_response_schema(cleaning_type),
+                    "maxOutputTokens": 3000,
+                },
+            },
+        )
+
+    endpoint = _GROQ_ENDPOINT if provider == "GroqCloud" else _OPENROUTER_ENDPOINT
+    return (
+        endpoint,
+        {"Authorization": f"Bearer {api_key}"},
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "max_tokens": 3000,
+        },
     )
 
 
@@ -637,10 +723,14 @@ async def draft_quotation(
     master_reference: str,
 ) -> dict:
     """Draft a detailed proposal from the job brief and sanitized master context."""
-    key = (os.getenv("GEMINI_API_KEY") or "").strip()
-    if not key:
+    providers, configuration_issues = _configured_providers()
+    if not providers:
+        details = " ".join(configuration_issues)
         raise JobDraftError(
-            "AI job drafting is unavailable because GEMINI_API_KEY is not configured.",
+            "AI job drafting is unavailable because no provider is configured. Set "
+            "GEMINI_API_KEY, GROQ_API_KEY with GROQ_MODEL, or "
+            "OPENROUTER_API_KEY with OPENROUTER_MODEL."
+            + (f" {details}" if details else ""),
             status_code=503,
         )
     if cleaning_type not in _CLEANING_TYPE_LABELS:
@@ -751,36 +841,33 @@ considerations, 0-15 assumptions or exclusions, and 0-20 missing-information
 notes. Do not include Naira amounts, subtotals, totals or amount-in-words; the
 server computes them."""
 
-    preferred = (os.getenv("GEMINI_MODEL") or _MODELS[0]).strip()
-    candidates = [preferred, *[model for model in _MODELS if model != preferred]][:2]
-    errors: list[tuple[str, str, bool]] = []
-    for model in candidates:
+    errors: list[tuple[str, str, bool, int]] = []
+    for provider, model, api_key in providers:
         try:
             async with httpx.AsyncClient(timeout=30.0) as http:
                 for attempt in range(2):
-                    response = await http.post(
-                        _ENDPOINT.format(model=model),
-                        headers={"x-goog-api-key": key},
-                        json={
-                            "contents": [{"parts": [{"text": prompt}]}],
-                            "generationConfig": {
-                                "temperature": 0.2,
-                                "responseMimeType": "application/json",
-                                "responseSchema": _generation_response_schema(cleaning_type),
-                                "maxOutputTokens": 3000,
-                            },
-                        },
+                    url, headers, payload = _provider_request(
+                        provider, model, api_key, prompt, cleaning_type,
                     )
-                    if response.status_code != 429:
+                    response = await http.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                    )
+                    if response.status_code not in (429, 503):
                         break
                     retry_after = _provider_retry_after_seconds(response)
+                    if response.status_code == 503 and retry_after is None:
+                        retry_after = 1.0
                     if (
                         attempt == 0
                         and retry_after is not None
-                        and retry_after <= _MAX_AUTOMATIC_429_WAIT_SECONDS
+                        and retry_after <= _MAX_AUTOMATIC_RETRY_WAIT_SECONDS
                     ):
                         logger.info(
-                            "Gemini rate limited %s; retrying once after %.2f seconds",
+                            "%s returned HTTP %s for %s; retrying once after %.2f seconds",
+                            provider,
+                            response.status_code,
                             model,
                             retry_after,
                         )
@@ -788,8 +875,23 @@ server computes them."""
                         continue
                     break
 
+            if response.status_code == 503:
+                detail = _provider_error_detail(response, api_key=api_key)
+                suffix = f" Provider detail: {detail.rstrip('. ')}." if detail else ""
+                retry_after = _provider_retry_after_seconds(response)
+                retry_hint = (
+                    f" Try again in about {max(1, int(retry_after + 0.999))} seconds."
+                    if retry_after is not None
+                    else " Please retry shortly."
+                )
+                raise JobDraftError(
+                    f"{provider} is temporarily unavailable (HTTP 503)."
+                    f"{suffix}{retry_hint} "
+                    "Your entered job details are still in the form.",
+                    status_code=503,
+                )
             if response.status_code == 429:
-                detail = _provider_error_detail(response, api_key=key)
+                detail = _provider_error_detail(response, api_key=api_key)
                 suffix = f" Provider detail: {detail.rstrip('. ')}." if detail else ""
                 retry_after = _provider_retry_after_seconds(response)
                 if retry_after is not None:
@@ -800,17 +902,18 @@ server computes them."""
                 else:
                     retry_hint = " Try again after the quota or rate limit resets."
                 raise JobDraftError(
-                    "Gemini is temporarily rate-limiting this request (HTTP 429)."
+                    f"{provider} is temporarily rate-limiting this request (HTTP 429)."
                     f"{suffix}{retry_hint} Your entered job details are still in the form.",
                     status_code=429,
                 )
             if response.status_code != 200:
-                detail = _provider_error_detail(response, api_key=key)
+                detail = _provider_error_detail(response, api_key=api_key)
                 suffix = f": {detail.rstrip('. ')}" if detail else ""
                 raise JobDraftError(
-                    f"AI provider returned HTTP {response.status_code}{suffix}."
+                    f"{provider} returned HTTP {response.status_code}{suffix}.",
+                    status_code=response.status_code,
                 )
-            data = _response_text(response)
+            data = _response_text(response, provider=provider)
             quotation_text, missing_info, total = _build_quotation(
                 data,
                 cleaning_type=cleaning_type,
@@ -831,30 +934,50 @@ server computes them."""
                 "notice": _NOTICE,
             }
         except JobDraftError as exc:
-            if exc.status_code == 429:
-                raise
             message = str(exc).strip() or f"{type(exc).__name__} (no detail)"
-            errors.append((model, message, False))
+            errors.append((provider, message, False, exc.status_code))
             logger.warning(
-                "Job quotation drafting with %s failed (%s): %s",
+                "Job quotation drafting with %s model %s failed (%s): %s",
+                provider,
                 model,
                 type(exc).__name__,
                 message,
             )
         except httpx.TimeoutException as exc:
-            message = _transport_error_message(exc)
-            errors.append((model, message, True))
-            logger.warning("Job quotation drafting with %s failed: %s", model, message)
+            message = _transport_error_message(provider, exc)
+            errors.append((provider, message, True, 504))
+            logger.warning("Job quotation drafting with %s failed: %s", provider, message)
         except httpx.HTTPError as exc:
-            message = _transport_error_message(exc)
-            errors.append((model, message, False))
-            logger.warning("Job quotation drafting with %s failed: %s", model, message)
+            message = _transport_error_message(provider, exc)
+            errors.append((provider, message, False, 502))
+            logger.warning("Job quotation drafting with %s failed: %s", provider, message)
 
     if errors:
         error_summary = "; ".join(
-            f"{model}: {message}" for model, message, _is_timeout in errors
+            f"{provider}: {message}"
+            for provider, message, _is_timeout, _status in errors
         )
-        status_code = 504 if all(is_timeout for _, _, is_timeout in errors) else 502
+        if configuration_issues:
+            error_summary += "; " + "; ".join(configuration_issues)
+        status_code = (
+            503 if all(status == 503 for _, _, _, status in errors)
+            else 429 if all(status == 429 for _, _, _, status in errors)
+            else 504 if all(is_timeout for _, _, is_timeout, _ in errors)
+            else 502
+        )
+        if status_code == 503:
+            raise JobDraftError(
+                "All configured AI providers are temporarily unavailable (HTTP 503). "
+                f"{error_summary} Please retry shortly. "
+                "Your entered job details are still in the form.",
+                status_code=503,
+            )
+        if status_code == 429:
+            raise JobDraftError(
+                "All configured AI providers are temporarily rate-limiting this request. "
+                f"{error_summary} Your entered job details are still in the form.",
+                status_code=429,
+            )
     else:
         error_summary = "the provider returned an empty response with no error details"
         status_code = 502

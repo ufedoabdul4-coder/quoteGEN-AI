@@ -30,6 +30,14 @@ from services.job_draft import (  # noqa: E402
 
 class JobDraftTests(unittest.TestCase):
     def setUp(self):
+        self.provider_env = mock.patch.dict(os.environ, {
+            "GROQ_API_KEY": "",
+            "GROQ_MODEL": "",
+            "OPENROUTER_API_KEY": "",
+            "OPENROUTER_MODEL": "",
+        })
+        self.provider_env.start()
+        self.addCleanup(self.provider_env.stop)
         self.data = {
             "service_type": "residential_deep_cleaning",
             "title": "Residential Cleaning Quotation",
@@ -473,6 +481,122 @@ class JobDraftTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 429)
         self.assertEqual(len(requests), 1)
 
+    def test_groqcloud_is_used_when_gemini_is_unavailable(self):
+        original_client = httpx.AsyncClient
+        requests = []
+
+        async def provider(request):
+            requests.append(request)
+            if "generativelanguage.googleapis.com" in str(request.url):
+                return httpx.Response(
+                    503,
+                    headers={"Retry-After": "30"},
+                    json={"error": {"message": "Gemini is overloaded."}},
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{
+                    "message": {"content": json.dumps(self.data)},
+                }]},
+            )
+
+        transport = httpx.MockTransport(provider)
+        with (
+            mock.patch.dict(os.environ, {
+                "GEMINI_API_KEY": "gemini-test-key",
+                "GEMINI_MODEL": "test-gemini",
+                "GROQ_API_KEY": "groq-test-key",
+                "GROQ_MODEL": "test-groq-model",
+            }),
+            mock.patch.object(
+                job_draft.httpx,
+                "AsyncClient",
+                side_effect=lambda timeout: original_client(timeout=timeout, transport=transport),
+            ),
+        ):
+            result = asyncio.run(job_draft.draft_quotation(
+                job_description="Bedrooms and bathrooms",
+                quotation_goal="A detailed cleaning proposal",
+                target_total_ngn=800000,
+                profile=BusinessProfile(),
+                client=ClientInfo(),
+                master_reference="Bedroom cleaning reference",
+            ))
+
+        self.assertEqual(len(requests), 2)
+        self.assertIn("generativelanguage.googleapis.com", str(requests[0].url))
+        self.assertEqual(
+            str(requests[1].url),
+            "https://api.groq.com/openai/v1/chat/completions",
+        )
+        self.assertEqual(requests[1].headers["Authorization"], "Bearer groq-test-key")
+        groq_payload = json.loads(requests[1].content)
+        self.assertEqual(groq_payload["model"], "test-groq-model")
+        self.assertEqual(groq_payload["response_format"], {"type": "json_object"})
+        self.assertEqual(result["model"], "test-groq-model")
+        self.assertEqual(result["suggested_total_ngn"], 800000)
+
+    def test_openrouter_is_used_when_gemini_and_grok_are_unavailable(self):
+        original_client = httpx.AsyncClient
+        requests = []
+
+        async def provider(request):
+            requests.append(request)
+            if request.url.host in {
+                "generativelanguage.googleapis.com",
+                "api.groq.com",
+            }:
+                return httpx.Response(
+                    503,
+                    headers={"Retry-After": "30"},
+                    json={"error": {"message": "Provider is overloaded."}},
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{
+                    "message": {"content": json.dumps(self.data)},
+                }]},
+            )
+
+        transport = httpx.MockTransport(provider)
+        with (
+            mock.patch.dict(os.environ, {
+                "GEMINI_API_KEY": "gemini-test-key",
+                "GEMINI_MODEL": "test-gemini",
+                "GROQ_API_KEY": "groq-test-key",
+                "GROQ_MODEL": "test-groq-model",
+                "OPENROUTER_API_KEY": "openrouter-test-key",
+                "OPENROUTER_MODEL": "test/openrouter-model",
+            }),
+            mock.patch.object(
+                job_draft.httpx,
+                "AsyncClient",
+                side_effect=lambda timeout: original_client(timeout=timeout, transport=transport),
+            ),
+        ):
+            result = asyncio.run(job_draft.draft_quotation(
+                job_description="Bedrooms and bathrooms",
+                quotation_goal="A detailed cleaning proposal",
+                target_total_ngn=800000,
+                profile=BusinessProfile(),
+                client=ClientInfo(),
+                master_reference="Bedroom cleaning reference",
+            ))
+
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(
+            str(requests[2].url),
+            "https://openrouter.ai/api/v1/chat/completions",
+        )
+        self.assertEqual(
+            requests[2].headers["Authorization"],
+            "Bearer openrouter-test-key",
+        )
+        openrouter_payload = json.loads(requests[2].content)
+        self.assertEqual(openrouter_payload["model"], "test/openrouter-model")
+        self.assertEqual(result["model"], "test/openrouter-model")
+        self.assertEqual(result["suggested_total_ngn"], 800000)
+
     def test_short_gemini_retry_after_is_retried_once_on_same_model(self):
         original_client = httpx.AsyncClient
         requests = []
@@ -519,6 +643,134 @@ class JobDraftTests(unittest.TestCase):
         self.assertTrue(all("test-model" in request.url.path for request in requests))
         self.assertEqual(result["suggested_total_ngn"], 800000)
 
+    def test_short_gemini_503_retries_once_on_same_model(self):
+        original_client = httpx.AsyncClient
+        requests = []
+
+        async def provider(request):
+            requests.append(request)
+            if len(requests) == 1:
+                return httpx.Response(
+                    503,
+                    headers={"Retry-After": "0.01"},
+                    json={"error": {"message": "Model is temporarily overloaded."}},
+                )
+            return httpx.Response(
+                200,
+                json={"candidates": [{
+                    "content": {"parts": [{"text": json.dumps(self.data)}]},
+                }]},
+            )
+
+        transport = httpx.MockTransport(provider)
+        with (
+            mock.patch.dict(os.environ, {
+                "GEMINI_API_KEY": "test-key",
+                "GEMINI_MODEL": "test-model",
+            }),
+            mock.patch.object(
+                job_draft.httpx,
+                "AsyncClient",
+                side_effect=lambda timeout: original_client(timeout=timeout, transport=transport),
+            ),
+        ):
+            result = asyncio.run(job_draft.draft_quotation(
+                job_description="Bedrooms and bathrooms",
+                quotation_goal="A detailed cleaning proposal",
+                target_total_ngn=800000,
+                profile=BusinessProfile(),
+                client=ClientInfo(),
+                master_reference="Bedroom cleaning reference",
+            ))
+
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(all("test-model" in request.url.path for request in requests))
+        self.assertEqual(result["suggested_total_ngn"], 800000)
+
+    def test_repeated_gemini_503_returns_clear_retryable_unavailable_error(self):
+        original_client = httpx.AsyncClient
+        requested_models = []
+
+        async def provider(request):
+            model = request.url.path.split("/")[-1].split(":")[0]
+            requested_models.append(model)
+            return httpx.Response(
+                503,
+                json={"error": {
+                    "message": "This model is currently experiencing high demand.",
+                }},
+            )
+
+        transport = httpx.MockTransport(provider)
+        with (
+            mock.patch.dict(os.environ, {
+                "GEMINI_API_KEY": "test-key",
+                "GEMINI_MODEL": "test-model",
+            }),
+            mock.patch.object(
+                job_draft.httpx,
+                "AsyncClient",
+                side_effect=lambda timeout: original_client(timeout=timeout, transport=transport),
+            ),
+            mock.patch.object(job_draft.asyncio, "sleep", new=mock.AsyncMock()),
+        ):
+            with self.assertRaisesRegex(
+                JobDraftError,
+                r"All configured AI providers are temporarily unavailable \(HTTP 503\).*"
+                r"Gemini is temporarily unavailable \(HTTP 503\).*high demand.*"
+                r"Please retry shortly.*job details are still in the form",
+            ) as raised:
+                asyncio.run(job_draft.draft_quotation(
+                    job_description="Bedrooms and bathrooms",
+                    quotation_goal="A detailed cleaning proposal",
+                    target_total_ngn=800000,
+                    profile=BusinessProfile(),
+                    client=ClientInfo(),
+                    master_reference="Bedroom cleaning reference",
+                ))
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(requested_models, ["test-model", "test-model"])
+
+    def test_long_gemini_503_retry_delay_does_not_trigger_automatic_retry(self):
+        original_client = httpx.AsyncClient
+        requested_models = []
+
+        async def provider(request):
+            requested_models.append(request.url.path.split("/")[-1].split(":")[0])
+            return httpx.Response(
+                503,
+                headers={"Retry-After": "30"},
+                json={"error": {"message": "Model is temporarily overloaded."}},
+            )
+
+        transport = httpx.MockTransport(provider)
+        with (
+            mock.patch.dict(os.environ, {
+                "GEMINI_API_KEY": "test-key",
+                "GEMINI_MODEL": "test-model",
+            }),
+            mock.patch.object(
+                job_draft.httpx,
+                "AsyncClient",
+                side_effect=lambda timeout: original_client(timeout=timeout, transport=transport),
+            ),
+            mock.patch.object(job_draft.asyncio, "sleep", new=mock.AsyncMock()) as sleep,
+        ):
+            with self.assertRaises(JobDraftError) as raised:
+                asyncio.run(job_draft.draft_quotation(
+                    job_description="Bedrooms and bathrooms",
+                    quotation_goal="A detailed cleaning proposal",
+                    target_total_ngn=800000,
+                    profile=BusinessProfile(),
+                    client=ClientInfo(),
+                    master_reference="Bedroom cleaning reference",
+                ))
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(requested_models, ["test-model"])
+        sleep.assert_not_awaited()
+
     def test_empty_text_timeout_is_reported_with_model_and_exception_type(self):
         original_client = httpx.AsyncClient
         requested_models = []
@@ -542,8 +794,7 @@ class JobDraftTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 JobDraftError,
-                r"test-model: Gemini request timed out \(ReadTimeout\).*"
-                r"gemini-3\.8-flash: Gemini request timed out \(ReadTimeout\)",
+                r"Gemini: Gemini request timed out \(ReadTimeout\)",
             ) as raised:
                 asyncio.run(job_draft.draft_quotation(
                     job_description="Bedrooms and bathrooms",
@@ -555,4 +806,4 @@ class JobDraftTests(unittest.TestCase):
                 ))
 
         self.assertEqual(raised.exception.status_code, 504)
-        self.assertEqual(requested_models, ["test-model", "gemini-3.8-flash"])
+        self.assertEqual(requested_models, ["test-model"])

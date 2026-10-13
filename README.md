@@ -10,6 +10,10 @@ publish the frontend. In Render, create a Blueprint instance from this
 repository and set the prompted environment variables before deploying:
 
 - `GEMINI_API_KEY`: Gemini API key used by the backend.
+- `GROQ_API_KEY` and `GROQ_MODEL`: optional GroqCloud fallback credentials
+  and model ID.
+- `OPENROUTER_API_KEY` and `OPENROUTER_MODEL`: optional OpenRouter fallback
+  credentials and model ID (OpenRouter requires a model ID).
 - `SUPABASE_SERVICE_ROLE_KEY`: Supabase service-role key. Keep this secret and
   enter it only in Render's environment settings; never put it in the repository
   or frontend configuration.
@@ -96,10 +100,15 @@ to the target before rendering the proposal with the same master-template
 design and saving it as a document. The
 AI-generated prices are estimates, not a rate card; review every line against
 approved rates before sending. The active master must be a text-searchable PDF.
-Job drafting requires `GEMINI_API_KEY` on the backend. If Gemini returns a
-429 rate-limit response with a short retry delay, the backend waits and retries
-once on the same model. Longer quota waits are returned to the user without
-switching credentials or models; the job details remain in the form for retry.
+Job drafting tries configured providers in this order: Gemini, GroqCloud, then
+OpenRouter. A 429 or 503 with a short retry delay is retried once on that same
+provider before moving to the next; longer waits do not block fallback.
+`GEMINI_MODEL` controls Gemini's model; `GROQ_MODEL` and `OPENROUTER_MODEL`
+must be set when their respective keys are configured. API keys belong only in
+the backend's Render environment settings, never in the repository or
+frontend. Requests will be sent to providers in the configured fallback
+order. If all providers fail, the entered job details remain in the form and
+the API reports the provider errors.
 
 In Render, set these backend environment variables:
 
