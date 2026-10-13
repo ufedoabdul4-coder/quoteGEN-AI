@@ -3,7 +3,7 @@ import {
   Sparkles, LoaderCircle, Download, ScanText, Pencil, X, Check,
 } from 'lucide-react';
 import type {
-  BusinessProfile, ClientInfo, DocumentRecord, GenerateRequest, TemplateMeta,
+  BusinessProfile, CleaningServiceType, ClientInfo, DocumentRecord, GenerateRequest, TemplateMeta,
   SemanticBlock, Understanding,
 } from '../types';
 import { api, ApiError, openAuthenticatedAsset } from '../services/api';
@@ -32,6 +32,21 @@ Scope of works
 Payment terms: 70% deposit on award, balance on completion.
 Signature: ______________________`;
 
+const CLEANING_SERVICES: { value: CleaningServiceType; label: string }[] = [
+  { value: 'residential_deep_cleaning', label: 'Residential deep cleaning' },
+  { value: 'regular_house_cleaning', label: 'Regular house cleaning' },
+  { value: 'post_construction_cleaning', label: 'Post-construction cleaning' },
+  { value: 'office_cleaning', label: 'Office cleaning' },
+  { value: 'commercial_facility_cleaning', label: 'Commercial facility cleaning' },
+  { value: 'move_in_move_out_cleaning', label: 'Move-in or move-out cleaning' },
+  { value: 'upholstery_cleaning', label: 'Upholstery cleaning' },
+  { value: 'fumigation_pest_control', label: 'Fumigation or pest control' },
+];
+
+function isCleaningServiceType(value: string): value is CleaningServiceType {
+  return CLEANING_SERVICES.some((service) => service.value === value);
+}
+
 type Busy = 'draft' | 'understand' | 'generate' | null;
 
 interface Props {
@@ -46,6 +61,8 @@ function buildPayload(
   understanding: Understanding, profile: BusinessProfile, client: ClientInfo, rawInput: string,
   documentId?: string | null, inputKind: 'paste' | 'job' = 'paste',
   jobMissingInfo: string[] = [],
+  jobDescription = '',
+  cleaningType: CleaningServiceType | null = null,
 ): GenerateRequest {
   return {
     title: understanding.title || 'Quotation',
@@ -57,6 +74,8 @@ function buildPayload(
     raw_input: rawInput,
     document_id: documentId ?? null,
     input_kind: inputKind,
+    job_description: jobDescription,
+    cleaning_type: cleaningType,
     job_missing_info: jobMissingInfo,
   };
 }
@@ -66,13 +85,23 @@ export function CreateQuotation({
 }: Props) {
   const { email, session } = useAuth();
   const [text, setText] = useState(initialDocument?.raw_input || '');
-  const [inputMode, setInputMode] = useState<'paste' | 'job'>('paste');
+  const [inputMode, setInputMode] = useState<'paste' | 'job'>(
+    initialDocument?.input_kind === 'job' ? 'job' : 'paste',
+  );
   const [generatedFromJob, setGeneratedFromJob] = useState(
     initialDocument?.input_kind === 'job',
   );
-  const [jobDescription, setJobDescription] = useState('');
+  const [jobDescription, setJobDescription] = useState(initialDocument?.job_description || '');
+  const [cleaningType, setCleaningType] = useState<CleaningServiceType>(
+    initialDocument?.cleaning_type || 'residential_deep_cleaning',
+  );
   const [quotationGoal, setQuotationGoal] = useState('');
-  const [targetTotalNgn, setTargetTotalNgn] = useState('');
+  const [targetTotalNgn, setTargetTotalNgn] = useState(() => {
+    const savedTotal = initialDocument?.understanding.financials.grand_total;
+    return initialDocument?.input_kind === 'job' && savedTotal
+      ? String(Math.round(savedTotal))
+      : '';
+  });
   const [jobMissingInfo, setJobMissingInfo] = useState<string[]>(
     initialDocument?.job_missing_info ?? [],
   );
@@ -120,6 +149,8 @@ export function CreateQuotation({
         buildPayload(
           currentUnderstanding, profile, client, text, documentId,
           generatedFromJob ? 'job' : 'paste', jobMissingInfo,
+          generatedFromJob ? jobDescription : '',
+          generatedFromJob ? cleaningType : null,
         ));
       setDocumentId(response.document_id);
       setPdfUrl(response.pdf_url);
@@ -152,6 +183,7 @@ export function CreateQuotation({
     setJobMissingInfo([]);
     try {
       const draft = await api.draftJobQuotation({
+        cleaning_type: cleaningType,
         job_description: jobDescription.trim(),
         quotation_goal: quotationGoal.trim(),
         target_total_ngn: targetTotal,
@@ -169,7 +201,7 @@ export function CreateQuotation({
       const response = await api.generate(
         buildPayload(
           draft.understanding, profile, client, draft.quotation_text, documentId, 'job',
-          draft.missing_info,
+          draft.missing_info, jobDescription.trim(), cleaningType,
         ),
       );
       setDocumentId(response.document_id);
@@ -212,6 +244,8 @@ export function CreateQuotation({
         buildPayload(
           draftUnderstanding, profile, client, text, documentId,
           generatedFromJob ? 'job' : inputMode, jobMissingInfo,
+          generatedFromJob ? jobDescription : '',
+          generatedFromJob ? cleaningType : null,
         ),
       );
       setUnderstanding(draftUnderstanding);
@@ -364,6 +398,27 @@ export function CreateQuotation({
           ) : inputMode === 'job' ? (
             <div className="space-y-3">
               <div>
+                <label htmlFor="cleaning-type" className="label">Cleaning service type</label>
+                <select
+                  id="cleaning-type"
+                  className="select"
+                  value={cleaningType}
+                  onChange={(event) => {
+                    if (isCleaningServiceType(event.target.value)) {
+                      setCleaningType(event.target.value);
+                    }
+                  }}
+                  disabled={Boolean(busy)}
+                >
+                  {CLEANING_SERVICES.map((service) => (
+                    <option key={service.value} value={service.value}>{service.label}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">
+                  This selection guides the scope and keeps unrelated services out of the proposal.
+                </p>
+              </div>
+              <div>
                 <label htmlFor="job-description" className="label">Job description</label>
                 <textarea
                   id="job-description"
@@ -385,7 +440,7 @@ export function CreateQuotation({
                   className="textarea"
                   value={quotationGoal}
                   onChange={(e) => setQuotationGoal(e.target.value)}
-                  placeholder="For example: a complete post-construction cleaning service, including the work phases and exclusions."
+                  placeholder="For example: a detailed proposal with a clear work sequence, agreed scope, and relevant exclusions."
                   maxLength={2000}
                   style={{ minHeight: 88 }}
                   disabled={Boolean(busy)}

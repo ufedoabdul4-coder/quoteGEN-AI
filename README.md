@@ -78,15 +78,19 @@ with Flutterwave before granting access.
 
 ## Draft a proposal from a job description
 
-In **Create a proposal**, choose **Describe a job** to provide the scope, what
-the proposal should cover, and its target total in Naira. The backend reads
+In **Create a proposal**, choose **Describe a job**, select the cleaning service
+type, then provide the scope, what the proposal should cover, and its target
+total in Naira. The selected service type is passed separately to the backend
+and takes precedence over conflicting free-text instructions; any conflict is
+flagged for review. The backend reads
 text from the signed-in user's active master proposal, removes its client
 identifiers and old prices, and uses the remaining work categories and detail
 as a guide. It expands each requested area into an introduction and numbered
 scope, then prepares detailed execution phases with activity lists and
 phase-specific itemised costs. It also includes proposed equipment and
 materials, quality-assurance steps, and review notes for missing or ambiguous
-information. The AI suggests relative cost weights; the backend allocates
+information. The original job description and service type are retained on the
+saved document. The AI suggests relative cost weights; the backend allocates
 those weights and calculates each phase subtotal so the line items sum exactly
 to the target before rendering the proposal with the same master-template
 design and saving it as a document. The

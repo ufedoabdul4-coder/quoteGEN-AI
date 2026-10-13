@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import BusinessProfile, ClientInfo  # noqa: E402
 from services import understanding  # noqa: E402
+from services import pipeline  # noqa: E402
 from services import store  # noqa: E402
 from services import job_draft  # noqa: E402
 from services.job_draft import (  # noqa: E402
@@ -30,12 +31,16 @@ from services.job_draft import (  # noqa: E402
 class JobDraftTests(unittest.TestCase):
     def setUp(self):
         self.data = {
+            "service_type": "residential_deep_cleaning",
             "title": "Residential Cleaning Quotation",
             "project_introduction": (
                 "A proposed cleaning service for the requested residential areas."
             ),
             "scope_sections": [{
                 "heading": "Bedrooms and bathrooms",
+                "source_reference": "Bedrooms and bathrooms",
+                "quantity": "",
+                "associated_facilities": [],
                 "items": [
                     "Dust and wipe accessible bedroom surfaces",
                     "Clean bedroom floors",
@@ -82,6 +87,8 @@ class JobDraftTests(unittest.TestCase):
                 "Correct accessible missed areas before handover.",
                 "Confirm any unresolved site-access limitations with the client.",
             ],
+            "safety_considerations": [],
+            "assumptions_exclusions": [],
             "terms": ["Confirm site measurements before work begins."],
             "missing_info": ["Confirm the service address."],
         }
@@ -95,14 +102,27 @@ class JobDraftTests(unittest.TestCase):
             self.data,
             job_description="Bedrooms and bathrooms",
             target_total_ngn=800000,
-            profile=BusinessProfile(name="Bright Works Ltd"),
-            client=ClientInfo(name="Acme Ltd"),
+            profile=BusinessProfile(
+                name="Bright Works Ltd",
+                phone="+2348000000000",
+                email="hello@brightworks.example",
+                address="Lagos, Nigeria",
+            ),
+            client=ClientInfo(
+                name="Acme Ltd",
+                contact_person="Ada Client",
+                address="Ikeja, Lagos",
+            ),
         )
 
         result = understanding.understand(quotation)
         self.assertEqual(total, 800000)
         self.assertEqual(missing, ["Confirm the service address."])
         self.assertTrue(quotation.startswith("# PROPOSAL FOR RESIDENTIAL CLEANING QUOTATION"))
+        self.assertIn("Service type: Residential deep cleaning", quotation)
+        self.assertIn("Company phone: +2348000000000", quotation)
+        self.assertIn("Company email: hello@brightworks.example", quotation)
+        self.assertIn("Client address: Ikeja, Lagos", quotation)
         self.assertGreaterEqual(quotation.count("- "), 9)
         self.assertIn("Amount in Words: Eight Hundred Thousand Naira only", quotation)
         self.assertIn("## Project overview", quotation)
@@ -114,6 +134,17 @@ class JobDraftTests(unittest.TestCase):
         self.assertEqual(result.financials.rows_total, 800000)
         self.assertEqual(result.financials.grand_total, 800000)
         self.assertTrue(result.financials.consistent)
+        rendered, report, _previews = pipeline.build(
+            "premium_business",
+            result,
+            BusinessProfile(name="Bright Works Ltd"),
+            ClientInfo(name="Acme Ltd"),
+            result.title,
+            make_previews=False,
+        )
+        self.assertTrue(rendered.pdf_bytes.startswith(b"%PDF"))
+        self.assertGreaterEqual(rendered.page_count, 1)
+        self.assertTrue(report.ok)
 
     def test_server_allocates_exact_target_using_relative_weights(self):
         cost_items = [
@@ -152,6 +183,28 @@ class JobDraftTests(unittest.TestCase):
 
         self.assertEqual(total, 850000)
 
+    def test_draft_rejects_service_type_that_differs_from_user_selection(self):
+        with self.assertRaisesRegex(JobDraftError, "selected cleaning service type"):
+            _build_quotation(
+                {**self.data, "service_type": "post_construction_cleaning"},
+                cleaning_type="residential_deep_cleaning",
+                job_description="Three bedrooms",
+                target_total_ngn=800000,
+                profile=BusinessProfile(),
+                client=ClientInfo(),
+            )
+
+    def test_proposal_does_not_invent_terms_when_none_are_supported(self):
+        quotation, _missing, _total = _build_quotation(
+            {**self.data, "terms": []},
+            job_description="Bedrooms and bathrooms",
+            target_total_ngn=800000,
+            profile=BusinessProfile(),
+            client=ClientInfo(),
+        )
+
+        self.assertNotIn("## Terms and conditions", quotation)
+
     def test_cost_allocation_rejects_invalid_weights_and_too_small_target(self):
         for weight in (0, -1, "NaN", "Infinity", "1e-13"):
             with self.subTest(weight=weight):
@@ -168,30 +221,46 @@ class JobDraftTests(unittest.TestCase):
 
     def test_each_separately_described_area_gets_its_own_detailed_section(self):
         areas = [
-            "Bedroom 1 with toilet",
-            "Bedroom 2 with toilet",
-            "Bedroom 3 with toilet",
+            "3 bedrooms with toilets",
             "Sitting room and toilet",
             "Guest room with toilet",
             "Open kitchen",
             "Dining room",
-            "Family lounge with balcony and BQ room with toilet",
+            "Family lounge with balcony",
+            "BQ",
+            "1 additional room with toilet",
+        ]
+        detailed_tasks = [
+            ["Dust accessible bedroom surfaces", "Clean bedroom floors", "Sanitise the attached toilets"],
+            ["Dust living-room surfaces", "Wipe accessible furniture exteriors", "Clean the sitting-room toilet"],
+            ["Dust guest-room fixtures", "Clean guest-room flooring", "Sanitise the guest toilet"],
+            ["Wipe accessible worktops", "Clean the sink and taps", "Clean kitchen flooring"],
+            ["Wipe accessible dining surfaces", "Clean visible fixtures", "Clean dining-area flooring"],
+            ["Dust lounge fixtures", "Clean accessible balcony surfaces", "Remove loose balcony debris"],
+            ["Confirm BQ facilities before detailing", "Clean confirmed accessible surfaces", "Flag unspecified BQ areas for review"],
+            ["Dust the additional room", "Clean the room floor", "Sanitise its toilet"],
         ]
         data = {
             **self.data,
             "scope_sections": [
                 {
                     "heading": area,
-                    "items": [
-                        f"Prepare and inspect {area}",
-                        f"Clean all accessible surfaces in {area}",
-                        f"Finish and quality-check {area}",
-                    ],
+                    "source_reference": area,
+                    "quantity": (
+                        "3 bedrooms" if area == "3 bedrooms with toilets"
+                        else "1 additional room" if area == "1 additional room with toilet"
+                        else ""
+                    ),
+                    "associated_facilities": (
+                        ["toilets"] if "toilet" in area.lower() else []
+                    ),
+                    "items": detailed_tasks[index],
                 }
-                for area in areas
+                for index, area in enumerate(areas)
             ],
+            "missing_info": ["Confirm which facilities are included in the BQ."],
         }
-        quotation, _missing, total = _build_quotation(
+        quotation, missing, total = _build_quotation(
             data,
             job_description="\n".join(areas),
             target_total_ngn=800000,
@@ -202,7 +271,79 @@ class JobDraftTests(unittest.TestCase):
         self.assertEqual(total, 800000)
         for area in areas:
             self.assertIn(f". {area}", quotation)
+        self.assertIn("3 bedrooms with toilets", quotation)
+        self.assertIn("1 additional room with toilet", quotation)
+        self.assertIn("Wipe accessible worktops", quotation)
+        self.assertIn("Confirm BQ facilities before detailing", quotation)
+        self.assertEqual(missing, ["Confirm which facilities are included in the BQ."])
         self.assertGreaterEqual(quotation.count("- "), 25)
+
+    def test_selected_office_service_type_is_rendered_without_changing_finances(self):
+        quotation, _missing, total = _build_quotation(
+            {**self.data, "service_type": "office_cleaning"},
+            cleaning_type="office_cleaning",
+            job_description="Bedrooms and bathrooms",
+            target_total_ngn=800000,
+            profile=BusinessProfile(),
+            client=ClientInfo(),
+        )
+
+        self.assertIn("Service type: Office cleaning", quotation)
+        self.assertEqual(total, 800000)
+
+    def test_post_construction_and_office_types_are_schema_constrained(self):
+        captured = []
+        original_client = httpx.AsyncClient
+
+        async def provider(request):
+            payload = json.loads(request.content)
+            prompt = payload["contents"][0]["parts"][0]["text"]
+            source_json = prompt.split("data:\n", 1)[1].split(
+                "\n\nThe active master proposal", 1,
+            )[0]
+            source = json.loads(source_json)
+            captured.append((source, payload["generationConfig"]["responseSchema"]))
+            response_data = {**self.data, "service_type": source["selected_cleaning_type"]}
+            return httpx.Response(
+                200,
+                json={"candidates": [{
+                    "content": {"parts": [{"text": json.dumps(response_data)}]},
+                }]},
+            )
+
+        transport = httpx.MockTransport(provider)
+        with (
+            mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "GEMINI_MODEL": "test-model"}),
+            mock.patch.object(
+                job_draft.httpx,
+                "AsyncClient",
+                side_effect=lambda timeout: original_client(timeout=timeout, transport=transport),
+            ),
+        ):
+            for service_type, label in (
+                ("post_construction_cleaning", "Post-construction cleaning"),
+                ("office_cleaning", "Office cleaning"),
+            ):
+                result = asyncio.run(job_draft.draft_quotation(
+                    cleaning_type=service_type,
+                    job_description="Bedrooms and bathrooms",
+                    quotation_goal="Prepare a service-specific proposal",
+                    target_total_ngn=800000,
+                    profile=BusinessProfile(),
+                    client=ClientInfo(),
+                    master_reference="Reusable work sequence and handover guidance",
+                ))
+                self.assertIn(f"Service type: {label}", result["quotation_text"])
+
+        self.assertEqual(
+            [source["selected_cleaning_type"] for source, _schema in captured],
+            ["post_construction_cleaning", "office_cleaning"],
+        )
+        for source, schema in captured:
+            self.assertEqual(
+                schema["properties"]["service_type"]["enum"],
+                [source["selected_cleaning_type"]],
+            )
 
     def test_master_reference_removes_identity_and_old_prices(self):
         document = pymupdf.open()
@@ -232,11 +373,13 @@ class JobDraftTests(unittest.TestCase):
 
     def test_ai_prompt_uses_sanitized_master_and_exact_target(self):
         captured_prompts = []
+        captured_schemas = []
         original_client = httpx.AsyncClient
 
         async def provider(request):
             payload = json.loads(request.content)
             captured_prompts.append(payload["contents"][0]["parts"][0]["text"])
+            captured_schemas.append(payload["generationConfig"]["responseSchema"])
             return httpx.Response(
                 200,
                 json={"candidates": [{
@@ -268,8 +411,18 @@ class JobDraftTests(unittest.TestCase):
         self.assertIn("server allocates the exact target total", captured_prompts[0])
         self.assertIn('"equipment_materials"', captured_prompts[0])
         self.assertIn('"quality_assurance"', captured_prompts[0])
+        self.assertIn('"safety_considerations"', captured_prompts[0])
+        self.assertIn('"assumptions_exclusions"', captured_prompts[0])
         self.assertIn("each with a description, practical activities", captured_prompts[0])
+        self.assertIn('"selected_cleaning_type": "residential_deep_cleaning"', captured_prompts[0])
+        self.assertIn("The selected cleaning type in the input is authoritative", captured_prompts[0])
+        self.assertIn("Residential deep cleaning and regular house cleaning do not imply", captured_prompts[0])
+        self.assertIn("Include those additional services only when explicitly selected or requested.", captured_prompts[0])
         self.assertIn("800000", captured_prompts[0])
+        self.assertEqual(
+            captured_schemas[0]["properties"]["service_type"]["enum"],
+            ["residential_deep_cleaning"],
+        )
         self.assertEqual(result["suggested_total_ngn"], 800000)
 
     def test_provider_quota_error_is_exposed_without_leaking_api_key(self):

@@ -146,6 +146,7 @@ async def draft_job_quotation(req: JobDraftRequest):
     try:
         master_reference = job_draft.active_master_reference()
         return await job_draft.draft_quotation(
+            cleaning_type=req.cleaning_type,
             job_description=req.job_description,
             quotation_goal=req.quotation_goal,
             target_total_ngn=req.target_total_ngn,
@@ -277,6 +278,8 @@ def generate(req: GenerateRequest):
     record.profile = req.profile
     record.raw_input = req.raw_input
     record.input_kind = req.input_kind
+    record.job_description = req.job_description
+    record.cleaning_type = req.cleaning_type
     record.job_missing_info = req.job_missing_info
     record.understanding = req.understanding
     record.validation = report

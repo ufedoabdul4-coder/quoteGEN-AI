@@ -18,6 +18,16 @@ from services import classify, store, understanding as deterministic
 logger = logging.getLogger(__name__)
 
 _MODELS = ("gemini-3.8-flash", "gemini-flash-latest")
+_CLEANING_TYPE_LABELS = {
+    "residential_deep_cleaning": "Residential deep cleaning",
+    "regular_house_cleaning": "Regular house cleaning",
+    "post_construction_cleaning": "Post-construction cleaning",
+    "office_cleaning": "Office cleaning",
+    "commercial_facility_cleaning": "Commercial facility cleaning",
+    "move_in_move_out_cleaning": "Move-in or move-out cleaning",
+    "upholstery_cleaning": "Upholstery cleaning",
+    "fumigation_pest_control": "Fumigation or pest control",
+}
 _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 _NOTICE = (
     "This is an AI-drafted proposal. Price lines are estimates, not approved rates; "
@@ -172,6 +182,21 @@ def _text_list(data: dict, key: str, *, maximum: int, limit: int = 240) -> list[
     return [_clean_line(value, field=key.replace("_", " "), limit=limit) for value in values]
 
 
+def _optional_text_list(
+    data: dict, key: str, *, maximum: int, limit: int = 240,
+) -> list[str]:
+    values = data.get(key, [])
+    if not isinstance(values, list) or len(values) > maximum:
+        raise JobDraftError(f"The AI draft returned an invalid {key.replace('_', ' ')} list.")
+    return [_clean_line(value, field=key.replace("_", " "), limit=limit) for value in values]
+
+
+def _optional_detail(label: str, value: str, *, field: str) -> str:
+    if not value.strip():
+        return ""
+    return f"{label}: {_clean_line(value, field=field, limit=240)}"
+
+
 def _allocate_costs(raw_cost_items: object, *, target_total_ngn: int) -> list[tuple[str, int]]:
     if not isinstance(raw_cost_items, list) or not 8 <= len(raw_cost_items) <= 25:
         raise JobDraftError("The AI draft did not include a valid cost breakdown.")
@@ -218,25 +243,45 @@ def _allocate_costs(raw_cost_items: object, *, target_total_ngn: int) -> list[tu
 
 
 def _scope_sections(
-    data: dict, *, minimum_sections: int,
-) -> list[tuple[str, list[str]]]:
+    data: dict, *, minimum_sections: int, job_description: str,
+) -> list[tuple[str, str, list[str], list[str]]]:
     raw_sections = data.get("scope_sections")
     if (
         not isinstance(raw_sections, list)
         or not minimum_sections <= len(raw_sections) <= 14
     ):
         raise JobDraftError("The AI draft did not include a detailed, room-by-room scope.")
-    sections: list[tuple[str, list[str]]] = []
+    sections: list[tuple[str, str, list[str], list[str]]] = []
     item_count = 0
+    normalized_source = re.sub(r"\s+", " ", job_description).casefold()
     for section in raw_sections:
         if not isinstance(section, dict):
             raise JobDraftError("The AI draft returned an invalid project-scope section.")
         heading = _clean_line(section.get("heading"), field="scope section", limit=120)
+        source_reference = _clean_line(
+            section.get("source_reference"), field="scope source reference", limit=600,
+        )
+        normalized_reference = re.sub(r"\s+", " ", source_reference).casefold()
+        if normalized_reference not in normalized_source:
+            raise JobDraftError(
+                "The AI draft included a scope reference that was not in the customer's brief."
+            )
+        raw_quantity = section.get("quantity", "")
+        if not isinstance(raw_quantity, str):
+            raise JobDraftError("The AI draft returned an invalid room quantity.")
+        quantity = re.sub(r"\s+", " ", raw_quantity).strip()
+        if quantity and re.sub(r"\s+", " ", quantity).casefold() not in normalized_reference:
+            raise JobDraftError(
+                "The AI draft changed a quantity instead of preserving the customer's wording."
+            )
+        facilities = _optional_text_list(
+            section, "associated_facilities", maximum=8, limit=160,
+        )
         items = _text_list(section, "items", maximum=8)
         if len(items) < 3:
             raise JobDraftError("Each project area needs at least three detailed scope tasks.")
         item_count += len(items)
-        sections.append((heading, items))
+        sections.append((heading, quantity, facilities, items))
     if item_count < 8 or item_count > 60:
         raise JobDraftError("The AI draft scope was too brief or too long to review.")
     return sections
@@ -278,15 +323,22 @@ def _proposal_phases(data: dict) -> list[dict]:
 def _build_quotation(
     data: dict,
     *,
+    cleaning_type: str = "residential_deep_cleaning",
     job_description: str,
     target_total_ngn: int,
     profile: BusinessProfile,
     client: ClientInfo,
 ) -> tuple[str, list[str], int]:
+    if data.get("service_type") != cleaning_type:
+        raise JobDraftError("The AI draft did not preserve the selected cleaning service type.")
     title = _clean_line(data.get("title"), field="quotation title", limit=120)
     described_areas = [line for line in job_description.splitlines() if line.strip()]
     minimum_sections = min(len(described_areas), 14) if len(described_areas) >= 4 else 1
-    scope_sections = _scope_sections(data, minimum_sections=minimum_sections)
+    scope_sections = _scope_sections(
+        data,
+        minimum_sections=minimum_sections,
+        job_description=job_description,
+    )
     introduction = _clean_line(
         data.get("project_introduction"), field="project introduction", limit=700,
     )
@@ -295,14 +347,30 @@ def _build_quotation(
     quality_assurance = _text_list(data, "quality_assurance", maximum=10)
     if len(quality_assurance) < 3:
         raise JobDraftError("The AI draft did not include a complete quality-assurance plan.")
-    terms = _text_list(data, "terms", maximum=12)
-    missing_info = _text_list(data, "missing_info", maximum=20) if data.get("missing_info") else []
+    safety = _optional_text_list(data, "safety_considerations", maximum=8)
+    assumptions = _optional_text_list(data, "assumptions_exclusions", maximum=15)
+    terms = _optional_text_list(data, "terms", maximum=12)
+    missing_info = _optional_text_list(data, "missing_info", maximum=20)
     client_name = (
         _clean_line(client.name, field="client name", limit=120) if client.name.strip() else ""
     )
     business_name = (
         _clean_line(profile.name, field="business name", limit=120) if profile.name.strip() else ""
     )
+    client_details = [
+        _optional_detail("Contact person", client.contact_person, field="client contact"),
+        _optional_detail("Client phone", client.phone, field="client phone"),
+        _optional_detail("Client email", client.email, field="client email"),
+        _optional_detail("Client address", client.address, field="client address"),
+    ]
+    company_details = [
+        _optional_detail("Business type", profile.business_type, field="business type"),
+        _optional_detail("Company phone", profile.phone, field="business phone"),
+        _optional_detail("Company email", profile.email, field="business email"),
+        _optional_detail("Company website", profile.website, field="business website"),
+        _optional_detail("Company address", profile.address, field="business address"),
+        _optional_detail("Registration", profile.registration, field="business registration"),
+    ]
 
     raw_cost_items = [item for phase in phases for item in phase["cost_items"]]
     allocated_costs = _allocate_costs(
@@ -323,9 +391,12 @@ def _build_quotation(
     lines = [f"# PROPOSAL FOR {title.upper()}"]
     if client_name:
         lines.append(f"Prepared for: {client_name}")
+        lines.extend(detail for detail in client_details if detail)
     if business_name:
         lines.append(f"Prepared by: {business_name}")
+        lines.extend(detail for detail in company_details if detail)
     lines.extend([
+        f"Service type: {_CLEANING_TYPE_LABELS[cleaning_type]}",
         f"Date: {date.today().isoformat()}",
         "",
         "## Project overview",
@@ -334,9 +405,15 @@ def _build_quotation(
         "## Detailed scope of work",
         *(
             line
-            for index, (heading, items) in enumerate(scope_sections, start=1)
+            for index, (heading, _quantity, facilities, items) in enumerate(
+                scope_sections, start=1,
+            )
             for line in [
                 f"### {index}. {heading}",
+                *(
+                    [f"Associated facilities: {', '.join(facilities)}"]
+                    if facilities else []
+                ),
                 *(f"- {item}" for item in items),
                 "",
             ]
@@ -367,6 +444,16 @@ def _build_quotation(
         "## Project execution and quality assurance",
         *(f"- {item}" for item in quality_assurance),
         "",
+        *(
+            ["## Safety and operational considerations",
+             *(f"- {item}" for item in safety), ""]
+            if safety else []
+        ),
+        *(
+            ["## Assumptions and exclusions",
+             *(f"- {item}" for item in assumptions), ""]
+            if assumptions else []
+        ),
         "## Consolidated project cost summary",
         "| Description | Amount |",
         "| --- | --- |",
@@ -376,9 +463,10 @@ def _build_quotation(
         ),
         f"| Grand Total | ₦{total:,} |",
         f"Amount in Words: {_amount_in_words(total)}",
-        "",
-        "## Terms and conditions",
-        *(f"- {term}" for term in terms),
+        *(
+            ["", "## Terms and conditions", *(f"- {term}" for term in terms)]
+            if terms else []
+        ),
     ])
     return "\n".join(lines), missing_info, total
 
@@ -410,8 +498,87 @@ def _provider_error_detail(response: httpx.Response, *, api_key: str) -> str:
     return detail[:500]
 
 
+def _generation_response_schema(cleaning_type: str) -> dict:
+    text_list = {"type": "ARRAY", "items": {"type": "STRING"}}
+    cost_item = {
+        "type": "OBJECT",
+        "properties": {
+            "description": {"type": "STRING"},
+            "relative_weight": {"type": "NUMBER"},
+        },
+        "required": ["description", "relative_weight"],
+    }
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "service_type": {
+                "type": "STRING",
+                "enum": [cleaning_type],
+            },
+            "title": {"type": "STRING"},
+            "project_introduction": {"type": "STRING"},
+            "scope_sections": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "heading": {"type": "STRING"},
+                        "source_reference": {"type": "STRING"},
+                        "quantity": {"type": "STRING"},
+                        "associated_facilities": text_list,
+                        "items": text_list,
+                    },
+                    "required": [
+                        "heading",
+                        "source_reference",
+                        "quantity",
+                        "associated_facilities",
+                        "items",
+                    ],
+                },
+            },
+            "phases": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "title": {"type": "STRING"},
+                        "description": {"type": "STRING"},
+                        "activities": text_list,
+                        "cost_items": {
+                            "type": "ARRAY",
+                            "items": cost_item,
+                        },
+                    },
+                    "required": ["title", "description", "activities", "cost_items"],
+                },
+            },
+            "equipment_materials": text_list,
+            "quality_assurance": text_list,
+            "safety_considerations": text_list,
+            "assumptions_exclusions": text_list,
+            "terms": text_list,
+            "missing_info": text_list,
+        },
+        "required": [
+            "service_type",
+            "title",
+            "project_introduction",
+            "scope_sections",
+            "phases",
+            "equipment_materials",
+            "quality_assurance",
+            "safety_considerations",
+            "assumptions_exclusions",
+            "terms",
+            "missing_info",
+        ],
+    }
+
+
 async def draft_quotation(
     *,
+    cleaning_type: str = "residential_deep_cleaning",
     job_description: str,
     quotation_goal: str,
     target_total_ngn: int,
@@ -426,8 +593,12 @@ async def draft_quotation(
             "AI job drafting is unavailable because GEMINI_API_KEY is not configured.",
             status_code=503,
         )
+    if cleaning_type not in _CLEANING_TYPE_LABELS:
+        raise JobDraftError("Select a supported cleaning service type.", status_code=422)
 
     source = {
+        "selected_cleaning_type": cleaning_type,
+        "selected_cleaning_type_label": _CLEANING_TYPE_LABELS[cleaning_type],
         "job_description": job_description.strip(),
         "quotation_goal": quotation_goal.strip(),
         "target_proposal_total_ngn": target_total_ngn,
@@ -435,7 +606,9 @@ async def draft_quotation(
         "business_type": re.sub(r"\s+", " ", profile.business_type).strip()[:120],
         "client_name": re.sub(r"\s+", " ", client.name).strip()[:120],
     }
-    prompt = f"""Draft a quotation from the following user-provided data:
+    prompt = f"""Act as a professional cleaning-services proposal writer and
+scope analyst. Generate the actual proposal content, not instructions for
+another model. Draft a quotation from the following user-provided data:
 {json.dumps(source, ensure_ascii=False)}
 
 The active master proposal contains these redacted examples of this business's
@@ -453,12 +626,27 @@ EXPAND the user's brief into a full professional proposal. Do not copy its clien
 identity, contact details, dates, identifiers, old project wording, or prices.
 Do not add rooms, services, measurements, licences, warranties, or conditions
 that are unsupported by either the job brief or the relevant master reference.
-Every room or area in the user's brief must appear as a scope section. Give
-each applicable room/area at least 3 specific, practical tasks, adapted from
+Every room or area in the user's brief must appear as a scope section. For
+each section include an exact source_reference phrase copied from the brief,
+the quantity wording copied exactly or an empty string when none is specified,
+and associated facilities as a separate list. Do not infer that a toilet is
+en-suite when this is unclear; describe the uncertainty in missing_info.
+Give each applicable room/area at least 3 specific, practical tasks, adapted from
 the reference's level of detail and limited to the requested job. Identify and
 preserve room distinctions and ambiguous quantities; list unresolved ambiguity
 in missing_info rather than guessing. Do not treat the target budget as proof of
 market cost or approved company rates.
+
+The selected cleaning type in the input is authoritative. Keep the proposal
+within that service category even if the free-text objective or job description
+mentions a different service. If they conflict, preserve the selected type and
+add a concise clarification to missing_info; do not silently switch services.
+Adapt terminology, activities, phases, equipment and exclusions to the selected
+type. Residential deep cleaning and regular house cleaning do not imply
+post-construction residue removal, fumigation, pest control, upholstery
+shampooing, appliance deep cleaning, facade work or waste evacuation.
+Include those additional services only when explicitly selected or requested.
+Never claim an inspection, assessment, treatment or work has already occurred.
 
 Write a clear project introduction, a numbered scope inventory, and 3-6
 meaningful execution phases, each with a description, practical activities,
@@ -471,7 +659,13 @@ explicitly requested. Do not claim that equipment, chemicals, quantities,
 rates, warranties, waste evacuation, or specialist services are confirmed if
 the user did not confirm them; label equipment as proposed for deployment.
 Provide at least three specific quality-assurance activities and applicable
-terms. Flag missing site details and scope ambiguities for human review.
+terms only when supported by the user's instructions or reusable master
+reference content. Do not invent payment schedules, validity periods, policies,
+warranties, certifications, guarantees, or customer agreements. Use an empty
+terms list when none are supported. Flag missing site details and scope
+ambiguities for human review. Include safety considerations and assumptions or
+exclusions only when relevant; do not present them as confirmed customer
+agreements.
 
 For each cost item return a positive relative_weight representing its share
 within the full project cost (for example 1, 2, or 3). Never calculate or
@@ -485,20 +679,27 @@ describe overlapping rooms or duplicate work, flag the ambiguity for the user
 to confirm.
 
 Return JSON only with this exact shape:
-{{"title":"proposal subject only, without the word Proposal",
+{{"service_type":"must exactly equal selected_cleaning_type",
+ "title":"proposal subject only, without the word Proposal",
  "project_introduction":"...",
- "scope_sections":[{{"heading":"...", "items":["..."]}}],
+ "scope_sections":[{{"heading":"...", "source_reference":"...",
+   "quantity":"...", "associated_facilities":["..."], "items":["..."]}}],
  "phases":[{{"title":"...", "description":"...", "activities":["..."],
    "cost_items":[{{"description":"...", "relative_weight":2.5}}]}}],
  "equipment_materials":["..."],
  "quality_assurance":["..."],
- "terms":["..."], "missing_info":["..."]}}
-Include 1-14 scope sections with 3-8 items each, at least 8 and no more than
+ "safety_considerations":[],
+ "assumptions_exclusions":[],
+ "terms":[], "missing_info":[]}}
+Include 1-14 scope sections with an exact customer source reference,
+quantity wording or an empty quantity, associated facilities, and 3-8 items
+each; at least 8 and no more than
 60 scope tasks in total, 3-6 phases with at least 2 activities and 2 cost
 items each, 8-25 total weighted cost items, 1-15 proposed resources,
-3-10 quality-assurance activities, 1-12 concise terms, and up to 20
-missing-information notes. Do not include Naira amounts, subtotals, totals or
-amount-in-words; the server computes them."""
+3-10 quality-assurance activities, 0-12 supported terms, 0-8 safety
+considerations, 0-15 assumptions or exclusions, and 0-20 missing-information
+notes. Do not include Naira amounts, subtotals, totals or amount-in-words; the
+server computes them."""
 
     preferred = (os.getenv("GEMINI_MODEL") or _MODELS[0]).strip()
     candidates = [preferred, *[model for model in _MODELS if model != preferred]][:2]
@@ -514,19 +715,21 @@ amount-in-words; the server computes them."""
                         "generationConfig": {
                             "temperature": 0.2,
                             "responseMimeType": "application/json",
+                            "responseSchema": _generation_response_schema(cleaning_type),
                             "maxOutputTokens": 3000,
                         },
                     },
                 )
             if response.status_code != 200:
                 detail = _provider_error_detail(response, api_key=key)
-                suffix = f": {detail}" if detail else ""
+                suffix = f": {detail.rstrip('. ')}" if detail else ""
                 raise JobDraftError(
                     f"AI provider returned HTTP {response.status_code}{suffix}."
                 )
             data = _response_text(response)
             quotation_text, missing_info, total = _build_quotation(
                 data,
+                cleaning_type=cleaning_type,
                 job_description=job_description,
                 target_total_ngn=target_total_ngn,
                 profile=profile,

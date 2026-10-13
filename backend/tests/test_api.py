@@ -179,6 +179,16 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_job_draft_rejects_unknown_cleaning_type(self):
+        response = self.client.post("/job-draft", json={
+            "cleaning_type": "unlisted_service",
+            "job_description": "Three offices",
+            "quotation_goal": "Cleaning",
+            "target_total_ngn": 500000,
+        })
+
+        self.assertEqual(response.status_code, 422)
+
     def test_job_draft_requires_active_master_proposal(self):
         with mock.patch.object(
             main.job_draft, "active_master_reference",
@@ -224,19 +234,24 @@ class ApiTests(unittest.TestCase):
             "notice": "Review prices before sending.",
         }
 
+        draft_mock = mock.AsyncMock(return_value=result)
         with (
             mock.patch.object(main.job_draft, "active_master_reference", return_value="Master proposal reference"),
             mock.patch.object(
-                main.job_draft, "draft_quotation", new=mock.AsyncMock(return_value=result),
+                main.job_draft, "draft_quotation", new=draft_mock,
             ),
         ):
             response = self.client.post("/job-draft", json={
+                "cleaning_type": "office_cleaning",
                 "job_description": "Clean bedrooms",
                 "quotation_goal": "Deep cleaning",
                 "target_total_ngn": 500000,
             })
 
         self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            draft_mock.await_args.kwargs["cleaning_type"], "office_cleaning",
+        )
         self.assertEqual(response.json()["suggested_total_ngn"], 500000)
         self.assertTrue(response.json()["understanding"]["blocks"])
 
@@ -249,6 +264,8 @@ class ApiTests(unittest.TestCase):
             "profile": {"name": "Bright Works Ltd"},
             "client": {"name": "Acme Ltd"},
             "input_kind": "job",
+            "job_description": "Three offices and a shared kitchenette",
+            "cleaning_type": "office_cleaning",
             "job_missing_info": ["Confirm access hours."],
         })
         self.assertEqual(response.status_code, 200, response.text)
@@ -261,6 +278,8 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(pdf.content.startswith(b"%PDF"))
         record = self.client.get(f"/documents/{doc_id}").json()
         self.assertEqual(record["input_kind"], "job")
+        self.assertEqual(record["job_description"], "Three offices and a shared kitchenette")
+        self.assertEqual(record["cleaning_type"], "office_cleaning")
         self.assertEqual(record["job_missing_info"], ["Confirm access hours."])
 
         listing = self.client.get("/documents").json()["documents"]
