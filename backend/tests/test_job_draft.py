@@ -154,6 +154,18 @@ class JobDraftTests(unittest.TestCase):
         self.assertGreaterEqual(rendered.page_count, 1)
         self.assertTrue(report.ok)
 
+    def test_draft_allows_no_proposed_equipment_when_none_is_justified(self):
+        quotation, _missing, total = _build_quotation(
+            {**self.data, "equipment_materials": []},
+            job_description="Bedrooms and bathrooms",
+            target_total_ngn=800000,
+            profile=BusinessProfile(),
+            client=ClientInfo(),
+        )
+
+        self.assertNotIn("Equipment, tools and materials proposed", quotation)
+        self.assertEqual(total, 800000)
+
     def test_server_allocates_exact_target_using_relative_weights(self):
         cost_items = [
             {"description": f"Work item {index}", "relative_weight": index}
@@ -532,7 +544,16 @@ class JobDraftTests(unittest.TestCase):
         self.assertEqual(requests[1].headers["Authorization"], "Bearer groq-test-key")
         groq_payload = json.loads(requests[1].content)
         self.assertEqual(groq_payload["model"], "test-groq-model")
-        self.assertEqual(groq_payload["response_format"], {"type": "json_object"})
+        response_format = groq_payload["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertTrue(response_format["json_schema"]["strict"])
+        strict_schema = response_format["json_schema"]["schema"]
+        self.assertEqual(strict_schema["type"], "object")
+        self.assertFalse(strict_schema["additionalProperties"])
+        self.assertEqual(
+            strict_schema["properties"]["equipment_materials"]["type"],
+            "array",
+        )
         self.assertEqual(result["model"], "test-groq-model")
         self.assertEqual(result["suggested_total_ngn"], 800000)
 
@@ -588,11 +609,15 @@ class JobDraftTests(unittest.TestCase):
             str(requests[2].url),
             "https://openrouter.ai/api/v1/chat/completions",
         )
+        openrouter_payload = json.loads(requests[2].content)
+        self.assertEqual(
+            openrouter_payload["response_format"],
+            {"type": "json_object"},
+        )
         self.assertEqual(
             requests[2].headers["Authorization"],
             "Bearer openrouter-test-key",
         )
-        openrouter_payload = json.loads(requests[2].content)
         self.assertEqual(openrouter_payload["model"], "test/openrouter-model")
         self.assertEqual(result["model"], "test/openrouter-model")
         self.assertEqual(result["suggested_total_ngn"], 800000)

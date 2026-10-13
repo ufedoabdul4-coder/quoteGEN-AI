@@ -349,7 +349,7 @@ def _build_quotation(
         data.get("project_introduction"), field="project introduction", limit=700,
     )
     phases = _proposal_phases(data)
-    equipment = _text_list(data, "equipment_materials", maximum=15)
+    equipment = _optional_text_list(data, "equipment_materials", maximum=15)
     quality_assurance = _text_list(data, "quality_assurance", maximum=10)
     if len(quality_assurance) < 3:
         raise JobDraftError("The AI draft did not include a complete quality-assurance plan.")
@@ -443,9 +443,11 @@ def _build_quotation(
                 "",
             ]
         ),
-        "",
-        "## Equipment, tools and materials proposed for deployment",
-        *(f"- {item}" for item in equipment),
+        *(
+            ["", "## Equipment, tools and materials proposed for deployment",
+             *(f"- {item}" for item in equipment)]
+            if equipment else []
+        ),
         "",
         "## Project execution and quality assurance",
         *(f"- {item}" for item in quality_assurance),
@@ -621,6 +623,19 @@ def _provider_request(
         )
 
     endpoint = _GROQ_ENDPOINT if provider == "GroqCloud" else _OPENROUTER_ENDPOINT
+    if provider == "GroqCloud":
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "cleaning_proposal",
+                "strict": True,
+                "schema": _strict_json_schema(
+                    _generation_response_schema(cleaning_type),
+                ),
+            },
+        }
+    else:
+        response_format = {"type": "json_object"}
     return (
         endpoint,
         {"Authorization": f"Bearer {api_key}"},
@@ -628,10 +643,30 @@ def _provider_request(
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
-            "response_format": {"type": "json_object"},
+            "response_format": response_format,
             "max_tokens": 3000,
         },
     )
+
+
+def _strict_json_schema(schema: dict) -> dict:
+    """Convert Gemini's response schema to strict OpenAI-compatible JSON Schema."""
+    def convert(value: object) -> object:
+        if isinstance(value, dict):
+            return _strict_json_schema(value)
+        if isinstance(value, list):
+            return [convert(item) for item in value]
+        return value
+
+    converted = {key: convert(value) for key, value in schema.items()}
+    schema_type = converted.get("type")
+    if isinstance(schema_type, str):
+        converted["type"] = schema_type.lower()
+    if converted.get("type") == "object":
+        properties = converted.get("properties", {})
+        converted["required"] = list(properties)
+        converted["additionalProperties"] = False
+    return converted
 
 
 def _generation_response_schema(cleaning_type: str) -> dict:
@@ -804,8 +839,9 @@ reference content. Do not invent payment schedules, validity periods, policies,
 warranties, certifications, guarantees, or customer agreements. Use an empty
 terms list when none are supported. Flag missing site details and scope
 ambiguities for human review. Include safety considerations and assumptions or
-exclusions only when relevant; do not present them as confirmed customer
-agreements.
+exclusions only when relevant; return an empty equipment list when proposing
+no additional resources is justified. Do not present assumptions or exclusions
+as confirmed customer agreements.
 
 For each cost item return a positive relative_weight representing its share
 within the full project cost (for example 1, 2, or 3). Never calculate or
@@ -826,7 +862,7 @@ Return JSON only with this exact shape:
    "quantity":"...", "associated_facilities":["..."], "items":["..."]}}],
  "phases":[{{"title":"...", "description":"...", "activities":["..."],
    "cost_items":[{{"description":"...", "relative_weight":2.5}}]}}],
- "equipment_materials":["..."],
+ "equipment_materials":[],
  "quality_assurance":["..."],
  "safety_considerations":[],
  "assumptions_exclusions":[],
@@ -835,7 +871,7 @@ Include 1-14 scope sections with an exact customer source reference,
 quantity wording or an empty quantity, associated facilities, and 3-8 items
 each; at least 8 and no more than
 60 scope tasks in total, 3-6 phases with at least 2 activities and 2 cost
-items each, 8-25 total weighted cost items, 1-15 proposed resources,
+items each, 8-25 total weighted cost items, 0-15 proposed equipment resources,
 3-10 quality-assurance activities, 0-12 supported terms, 0-8 safety
 considerations, 0-15 assumptions or exclusions, and 0-20 missing-information
 notes. Do not include Naira amounts, subtotals, totals or amount-in-words; the
