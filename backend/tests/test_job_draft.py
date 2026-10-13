@@ -178,6 +178,31 @@ class JobDraftTests(unittest.TestCase):
         self.assertEqual(allocated[0][0], "Work item 1")
         self.assertLess(allocated[0][1], allocated[-1][1])
 
+    def test_one_million_target_remains_exact_in_proposal_and_financial_parser(self):
+        quotation, _missing, total = _build_quotation(
+            self.data,
+            job_description="Bedrooms and bathrooms",
+            target_total_ngn=1_000_000,
+            profile=BusinessProfile(),
+            client=ClientInfo(),
+        )
+        parsed = understanding.understand(quotation)
+        _document, validation, _previews = pipeline.build(
+            "premium_business",
+            parsed,
+            BusinessProfile(),
+            ClientInfo(),
+            parsed.title,
+            make_previews=False,
+        )
+
+        self.assertEqual(total, 1_000_000)
+        self.assertIn("| Grand Total | ₦1,000,000 |", quotation)
+        self.assertEqual(parsed.financials.grand_total, 1_000_000)
+        self.assertEqual(parsed.financials.rows_total, 1_000_000)
+        self.assertTrue(parsed.financials.consistent)
+        self.assertTrue(validation.ok)
+
     def test_server_reconciles_model_amounts_to_target(self):
         phases = [
             {
@@ -428,7 +453,7 @@ class JobDraftTests(unittest.TestCase):
         self.assertIn("Bedroom cleaning; old price [price omitted]", captured_prompts[0])
         self.assertIn("target_proposal_total_ngn", captured_prompts[0])
         self.assertIn("relative_weight", captured_prompts[0])
-        self.assertIn("server allocates the exact target total", captured_prompts[0])
+        self.assertIn("The user's target is final", captured_prompts[0])
         self.assertIn('"equipment_materials"', captured_prompts[0])
         self.assertIn('"quality_assurance"', captured_prompts[0])
         self.assertIn('"safety_considerations"', captured_prompts[0])

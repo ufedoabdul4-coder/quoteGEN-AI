@@ -5,6 +5,14 @@ import { defineConfig } from 'vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    rollupOptions: {
+      input: {
+        app: 'index.html',
+        pdfEditor: 'pdf-editor/index.html',
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

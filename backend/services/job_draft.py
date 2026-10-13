@@ -9,7 +9,7 @@ import os
 import re
 from datetime import date
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from email.utils import parsedate_to_datetime
 
 import httpx
@@ -36,8 +36,8 @@ _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gen
 _GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 _OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 _NOTICE = (
-    "This is an AI-drafted proposal. Price lines are estimates, not approved rates; "
-    "review the scope, terms, and prices before sending."
+    "The proposal total is the exact amount you entered. The server distributes "
+    "that fixed total across the itemised work; it does not change the total."
 )
 _IDENTITY_LABELS = re.compile(
     r"^\s*(?:prepared\s+for|client(?:\s+name|\s+address)?|customer(?:\s+name)?|"
@@ -234,17 +234,23 @@ def _allocate_costs(raw_cost_items: object, *, target_total_ngn: int) -> list[tu
         weights.append(weight)
 
     remaining = target_total_ngn - len(descriptions)
-    total_weight = sum(weights)
-    shares = [Decimal(remaining) * weight / total_weight for weight in weights]
-    amounts = [int(share) + 1 for share in shares]
-    leftover = target_total_ngn - sum(amounts)
-    remainder_order = sorted(
-        range(len(shares)),
-        key=lambda index: (shares[index] - int(shares[index]), -index),
-        reverse=True,
-    )
-    for index in remainder_order[:leftover]:
-        amounts[index] += 1
+    with localcontext() as context:
+        context.prec = 50
+        total_weight = sum(weights)
+        shares = [Decimal(remaining) * weight / total_weight for weight in weights]
+        amounts = [int(share) + 1 for share in shares]
+        leftover = target_total_ngn - sum(amounts)
+        remainder_order = sorted(
+            range(len(shares)),
+            key=lambda index: (shares[index] - int(shares[index]), -index),
+            reverse=True,
+        )
+        if leftover < 0 or leftover > len(remainder_order):
+            raise JobDraftError("The server could not reconcile the cost allocation.")
+        for index in remainder_order[:leftover]:
+            amounts[index] += 1
+    if sum(amounts) != target_total_ngn:
+        raise JobDraftError("The server could not reconcile the cost allocation.")
     return list(zip(descriptions, amounts))
 
 
@@ -852,12 +858,12 @@ no additional resources is justified. Do not present assumptions or exclusions
 as confirmed customer agreements.
 
 For each cost item return a positive relative_weight representing its share
-within the full project cost (for example 1, 2, or 3). Never calculate or
-return Naira prices: the server allocates the exact target total across all
-weighted lines, and calculates each phase subtotal and the final total. Amounts
-are provisional estimates, not a verified agency rate card. If the requested
-scope may not reasonably fit the target, explicitly flag the concern in
-missing_info; do not hide shortfalls by omitting essential work.
+of the user's fixed proposal total (for example 1, 2, or 3). Never calculate
+or return Naira prices: the server distributes the user's exact target total
+across all weighted lines and calculates each phase subtotal and final total.
+The user's target is final; never lower, round, reinterpret, or replace it. If
+the requested scope may not reasonably fit the fixed total, flag that concern
+in missing_info without changing the total or omitting essential work.
 Identify missing information instead of guessing it. If the job brief could
 describe overlapping rooms or duplicate work, flag the ambiguity for the user
 to confirm.

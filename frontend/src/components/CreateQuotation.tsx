@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Sparkles, LoaderCircle, Download, ScanText, Pencil, X, Check,
 } from 'lucide-react';
@@ -6,7 +6,9 @@ import type {
   BusinessProfile, CleaningServiceType, ClientInfo, DocumentRecord, GenerateRequest, TemplateMeta,
   SemanticBlock, Understanding,
 } from '../types';
-import { api, ApiError, downloadAuthenticatedAsset } from '../services/api';
+import {
+  api, ApiError, authenticatedAsset, downloadAuthenticatedAsset,
+} from '../services/api';
 import { PreviewPane } from './PreviewPane';
 import { BlockEditor } from './BlockEditor';
 import { useAuth } from '../services/auth';
@@ -108,7 +110,7 @@ export function CreateQuotation({
   const [jobTotals, setJobTotals] = useState<{ total: number; target: number } | null>(null);
   const [jobEstimateNotice, setJobEstimateNotice] = useState(
     initialDocument?.input_kind === 'job'
-      ? 'This proposal contains AI-estimated prices. Review each line against your approved rates before sending.'
+      ? 'The proposal total is fixed at the amount entered when this draft was created.'
       : '',
   );
   const client: ClientInfo = initialDocument?.client
@@ -122,6 +124,10 @@ export function CreateQuotation({
     initialDocument?.preview_url ? [initialDocument.preview_url] : [],
   );
   const [pdfUrl, setPdfUrl] = useState(initialDocument?.pdf_url || '');
+  const [pdfEditorOpen, setPdfEditorOpen] = useState(false);
+  const [pdfEditorError, setPdfEditorError] = useState('');
+  const pdfEditorFrame = useRef<HTMLIFrameElement>(null);
+  const pdfEditorFileSent = useRef(false);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
   const [quotaExhausted, setQuotaExhausted] = useState(false);
@@ -190,6 +196,16 @@ export function CreateQuotation({
         profile,
         client,
       });
+      if (
+        draft.target_total_ngn !== targetTotal
+        || draft.suggested_total_ngn !== targetTotal
+        || draft.understanding.financials.grand_total !== targetTotal
+        || !draft.understanding.financials.consistent
+      ) {
+        throw new Error(
+          'The draft did not preserve your exact proposal total. Nothing was generated; please try again.',
+        );
+      }
       setText(draft.quotation_text);
       setGeneratedFromJob(true);
       setJobMissingInfo(draft.missing_info);
@@ -230,6 +246,64 @@ export function CreateQuotation({
       blocks: understanding.blocks.map((block) => ({ ...block, items: [...block.items] })),
     });
   };
+
+  useEffect(() => {
+    if (!pdfEditorOpen) return undefined;
+    let sendingFile = false;
+    const onEditorMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin
+        || event.source !== pdfEditorFrame.current?.contentWindow
+        || !event.data || typeof event.data !== 'object') return;
+      if (event.data.type === 'pdfzero:ready' && !sendingFile && !pdfEditorFileSent.current) {
+        sendingFile = true;
+        try {
+          const pdf = await authenticatedAsset(pdfUrl);
+          const bytes = await pdf.arrayBuffer();
+          if (pdfEditorFrame.current?.contentWindow) {
+            pdfEditorFileSent.current = true;
+            pdfEditorFrame.current.contentWindow.postMessage({
+              type: 'pdfzero:load',
+              bytes,
+              fileName: `${understanding?.title || 'quoteGEN-proposal'}.pdf`,
+            }, window.location.origin, [bytes]);
+          }
+        } catch (cause) {
+          setPdfEditorError(cause instanceof Error ? cause.message : 'Unable to load the PDF editor.');
+        } finally {
+          sendingFile = false;
+        }
+      } else if (event.data.type === 'pdfzero:export') {
+        const bytes = event.data.bytes;
+        if (!(bytes instanceof ArrayBuffer) || bytes.byteLength < 5
+          || new TextDecoder().decode(new Uint8Array(bytes, 0, 5)) !== '%PDF-') {
+          setPdfEditorError('The editor did not return a valid PDF. The original remains unchanged.');
+          pdfEditorFrame.current?.contentWindow?.postMessage({
+            type: 'pdfzero:download-error',
+          }, window.location.origin);
+          return;
+        }
+        const blob = new Blob([bytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = event.data.fileName
+          || `${understanding?.title || 'quoteGEN-proposal'}-corrected.pdf`;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setPdfEditorError('');
+        pdfEditorFrame.current?.contentWindow?.postMessage({
+          type: 'pdfzero:downloaded',
+        }, window.location.origin);
+      } else if (event.data.type === 'pdfzero:close') {
+        setPdfEditorOpen(false);
+      } else if (event.data.type === 'pdfzero:error') {
+        setPdfEditorError(typeof event.data.message === 'string'
+          ? event.data.message : 'The PDF editor could not complete that operation.');
+      }
+    };
+    window.addEventListener('message', onEditorMessage);
+    return () => window.removeEventListener('message', onEditorMessage);
+  }, [pdfEditorOpen, pdfUrl, understanding?.title]);
 
   const updateDraftBlocks = (blocks: SemanticBlock[]) => {
     setDraftUnderstanding((current) => current ? { ...current, blocks } : current);
@@ -282,6 +356,7 @@ export function CreateQuotation({
   };
 
   return (
+    <>
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       <div className="space-y-4 min-w-0">
         <div className="card p-4 sm:p-5 space-y-4">
@@ -462,7 +537,7 @@ export function CreateQuotation({
                   disabled={Boolean(busy)}
                 />
                 <p className="mt-1 text-xs text-[var(--text-muted)]">
-                  The server allocates this exact total across the AI-suggested work items. Review every estimate against your approved rates before sending.
+                  This is the final proposal total. The server distributes this exact amount across the work items and will not change it.
                 </p>
               </div>
               {jobEstimateNotice && (
@@ -555,9 +630,17 @@ export function CreateQuotation({
               {understanding && (
                 <button type="button" className="btn"
                   onClick={startEditing} disabled={Boolean(busy)}>
-                  <Pencil size={15} /> Edit content
+                  <Pencil size={15} /> Edit proposal content
                 </button>
               )}
+              <button type="button" className="btn"
+                onClick={() => {
+                  pdfEditorFileSent.current = false;
+                  setPdfEditorError('');
+                  setPdfEditorOpen(true);
+                }}>
+                <Pencil size={15} /> Edit PDF
+              </button>
               <button type="button" className="btn ml-auto"
                 onClick={() => { void downloadAuthenticatedAsset(
                   pdfUrl,
@@ -574,5 +657,34 @@ export function CreateQuotation({
         </div>
       </div>
     </div>
+    {pdfEditorOpen && (
+      <div className="fixed inset-0 z-50 bg-black/70 p-3 sm:p-6"
+        role="dialog" aria-modal="true" aria-label="Edit generated PDF">
+        <div className="mx-auto flex h-full max-w-[1600px] flex-col overflow-hidden rounded-xl bg-[var(--surface)] shadow-2xl">
+          <div className="flex items-center justify-between gap-4 border-b border-[var(--border)] px-4 py-3">
+            <div>
+              <h2 className="font-semibold">Edit generated PDF</h2>
+              <p className="text-xs text-[var(--text-muted)]">
+                Edits stay in this browser. Review every page before downloading; complex backgrounds and fonts may not reproduce exactly.
+              </p>
+            </div>
+            <button type="button" className="btn" onClick={() => setPdfEditorOpen(false)}
+              aria-label="Close PDF editor">
+              <X size={16} /> Close
+            </button>
+          </div>
+          {pdfEditorError && (
+            <p className="px-4 py-2 text-sm text-[var(--error)]" role="alert">{pdfEditorError}</p>
+          )}
+          <iframe
+            ref={pdfEditorFrame}
+            title="PDFZero editor"
+            src="/pdf-editor/"
+            className="min-h-0 w-full flex-1 border-0"
+          />
+        </div>
+      </div>
+    )}
+    </>
   );
 }
