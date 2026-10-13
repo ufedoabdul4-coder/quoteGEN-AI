@@ -279,6 +279,7 @@ def generate(req: GenerateRequest):
     record.raw_input = req.raw_input
     record.input_kind = req.input_kind
     record.job_description = req.job_description
+    record.quotation_goal = req.quotation_goal
     record.cleaning_type = req.cleaning_type
     record.job_missing_info = req.job_missing_info
     record.understanding = req.understanding

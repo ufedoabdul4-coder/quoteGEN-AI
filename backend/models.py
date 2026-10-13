@@ -284,6 +284,7 @@ class DocumentRecord(BaseModel):
     input_kind: str = "describe"  # describe | paste | reference | job
     raw_input: str = ""
     job_description: str = ""
+    quotation_goal: str = ""
     cleaning_type: Optional[CleaningServiceType] = None
     job_missing_info: List[str] = Field(default_factory=list)
     client: ClientInfo = Field(default_factory=ClientInfo)
@@ -354,6 +355,7 @@ class GenerateRequest(BaseModel):
     document_id: Optional[str] = None
     input_kind: Literal["paste", "job"] = "paste"
     job_description: str = Field(default="", max_length=10000)
+    quotation_goal: str = Field(default="", max_length=2000)
     cleaning_type: Optional[CleaningServiceType] = None
     job_missing_info: List[str] = Field(default_factory=list, max_length=20)
 

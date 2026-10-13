@@ -182,6 +182,7 @@ export interface DocumentRecord {
   input_kind: string;
   raw_input: string;
   job_description: string;
+  quotation_goal: string;
   cleaning_type: CleaningServiceType | null;
   job_missing_info: string[];
   client: ClientInfo;
@@ -229,6 +230,7 @@ export interface GenerateRequest {
   document_id?: string | null;
   input_kind?: 'paste' | 'job';
   job_description?: string;
+  quotation_goal?: string;
   cleaning_type?: CleaningServiceType | null;
   job_missing_info?: string[];
 }

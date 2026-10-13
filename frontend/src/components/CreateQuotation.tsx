@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   Sparkles, LoaderCircle, Download, ScanText, Pencil, X, Check,
 } from 'lucide-react';
@@ -7,10 +7,13 @@ import type {
   SemanticBlock, Understanding,
 } from '../types';
 import {
-  api, ApiError, authenticatedAsset, downloadAuthenticatedAsset,
+  api, ApiError, downloadAuthenticatedAsset,
 } from '../services/api';
 import { PreviewPane } from './PreviewPane';
 import { BlockEditor } from './BlockEditor';
+import { EditInstructions } from './EditInstructions';
+import type { InstructionValues } from './EditInstructions';
+import { CLEANING_SERVICES, isCleaningServiceType } from '../utils/cleaning';
 import { useAuth } from '../services/auth';
 
 const SAMPLE = `Quotation for Acme Facilities Ltd
@@ -34,21 +37,6 @@ Scope of works
 Payment terms: 70% deposit on award, balance on completion.
 Signature: ______________________`;
 
-const CLEANING_SERVICES: { value: CleaningServiceType; label: string }[] = [
-  { value: 'residential_deep_cleaning', label: 'Residential deep cleaning' },
-  { value: 'regular_house_cleaning', label: 'Regular house cleaning' },
-  { value: 'post_construction_cleaning', label: 'Post-construction cleaning' },
-  { value: 'office_cleaning', label: 'Office cleaning' },
-  { value: 'commercial_facility_cleaning', label: 'Commercial facility cleaning' },
-  { value: 'move_in_move_out_cleaning', label: 'Move-in or move-out cleaning' },
-  { value: 'upholstery_cleaning', label: 'Upholstery cleaning' },
-  { value: 'fumigation_pest_control', label: 'Fumigation or pest control' },
-];
-
-function isCleaningServiceType(value: string): value is CleaningServiceType {
-  return CLEANING_SERVICES.some((service) => service.value === value);
-}
-
 type Busy = 'draft' | 'understand' | 'generate' | null;
 
 interface Props {
@@ -65,6 +53,7 @@ function buildPayload(
   jobMissingInfo: string[] = [],
   jobDescription = '',
   cleaningType: CleaningServiceType | null = null,
+  quotationGoal = '',
 ): GenerateRequest {
   return {
     title: understanding.title || 'Quotation',
@@ -77,6 +66,7 @@ function buildPayload(
     document_id: documentId ?? null,
     input_kind: inputKind,
     job_description: jobDescription,
+    quotation_goal: quotationGoal,
     cleaning_type: cleaningType,
     job_missing_info: jobMissingInfo,
   };
@@ -97,7 +87,7 @@ export function CreateQuotation({
   const [cleaningType, setCleaningType] = useState<CleaningServiceType>(
     initialDocument?.cleaning_type || 'residential_deep_cleaning',
   );
-  const [quotationGoal, setQuotationGoal] = useState('');
+  const [quotationGoal, setQuotationGoal] = useState(initialDocument?.quotation_goal || '');
   const [targetTotalNgn, setTargetTotalNgn] = useState(() => {
     const savedTotal = initialDocument?.understanding.financials.grand_total;
     return initialDocument?.input_kind === 'job' && savedTotal
@@ -124,10 +114,9 @@ export function CreateQuotation({
     initialDocument?.preview_url ? [initialDocument.preview_url] : [],
   );
   const [pdfUrl, setPdfUrl] = useState(initialDocument?.pdf_url || '');
-  const [pdfEditorOpen, setPdfEditorOpen] = useState(false);
-  const [pdfEditorError, setPdfEditorError] = useState('');
-  const pdfEditorFrame = useRef<HTMLIFrameElement>(null);
-  const pdfEditorFileSent = useRef(false);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [instructionsError, setInstructionsError] = useState('');
+  const [originalInstructions, setOriginalInstructions] = useState<InstructionValues | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
   const [quotaExhausted, setQuotaExhausted] = useState(false);
@@ -157,6 +146,7 @@ export function CreateQuotation({
           generatedFromJob ? 'job' : 'paste', jobMissingInfo,
           generatedFromJob ? jobDescription : '',
           generatedFromJob ? cleaningType : null,
+          generatedFromJob ? quotationGoal : '',
         ));
       setDocumentId(response.document_id);
       setPdfUrl(response.pdf_url);
@@ -217,7 +207,7 @@ export function CreateQuotation({
       const response = await api.generate(
         buildPayload(
           draft.understanding, profile, client, draft.quotation_text, documentId, 'job',
-          draft.missing_info, jobDescription.trim(), cleaningType,
+          draft.missing_info, jobDescription.trim(), cleaningType, quotationGoal.trim(),
         ),
       );
       setDocumentId(response.document_id);
@@ -247,63 +237,126 @@ export function CreateQuotation({
     });
   };
 
-  useEffect(() => {
-    if (!pdfEditorOpen) return undefined;
-    let sendingFile = false;
-    const onEditorMessage = async (event: MessageEvent) => {
-      if (event.origin !== window.location.origin
-        || event.source !== pdfEditorFrame.current?.contentWindow
-        || !event.data || typeof event.data !== 'object') return;
-      if (event.data.type === 'pdfzero:ready' && !sendingFile && !pdfEditorFileSent.current) {
-        sendingFile = true;
-        try {
-          const pdf = await authenticatedAsset(pdfUrl);
-          const bytes = await pdf.arrayBuffer();
-          if (pdfEditorFrame.current?.contentWindow) {
-            pdfEditorFileSent.current = true;
-            pdfEditorFrame.current.contentWindow.postMessage({
-              type: 'pdfzero:load',
-              bytes,
-              fileName: `${understanding?.title || 'quoteGEN-proposal'}.pdf`,
-            }, window.location.origin, [bytes]);
-          }
-        } catch (cause) {
-          setPdfEditorError(cause instanceof Error ? cause.message : 'Unable to load the PDF editor.');
-        } finally {
-          sendingFile = false;
+  const currentInstructionValues = (): InstructionValues => ({
+    kind: generatedFromJob ? 'job' : 'paste',
+    text,
+    jobDescription,
+    quotationGoal,
+    cleaningType,
+    targetTotalNgn,
+  });
+
+  const rememberOriginal = (values: InstructionValues) => {
+    setOriginalInstructions((current) => current ?? values);
+  };
+
+  const openInstructions = () => {
+    if (!pdfUrl) return;
+    setInstructionsError('');
+    rememberOriginal(currentInstructionValues());
+    setInstructionsOpen(true);
+  };
+
+  const regenerateFromInstructions = async (values: InstructionValues) => {
+    setBusy('generate');
+    setInstructionsError('');
+    setError('');
+    try {
+      let nextUnderstanding: Understanding;
+      let rawInput: string;
+      let nextMissing: string[] = [];
+      let nextEngine: { usedAi: boolean; model: string } | null = null;
+      let nextJobTotals: { total: number; target: number } | null = null;
+
+      if (values.kind === 'job') {
+        const targetTotal = Number(values.targetTotalNgn);
+        if (!Number.isSafeInteger(targetTotal) || targetTotal <= 0) {
+          throw new Error('Enter a valid proposal total in Naira.');
         }
-      } else if (event.data.type === 'pdfzero:export') {
-        const bytes = event.data.bytes;
-        if (!(bytes instanceof ArrayBuffer) || bytes.byteLength < 5
-          || new TextDecoder().decode(new Uint8Array(bytes, 0, 5)) !== '%PDF-') {
-          setPdfEditorError('The editor did not return a valid PDF. The original remains unchanged.');
-          pdfEditorFrame.current?.contentWindow?.postMessage({
-            type: 'pdfzero:download-error',
-          }, window.location.origin);
-          return;
+        setBusy('draft');
+        const draft = await api.draftJobQuotation({
+          cleaning_type: values.cleaningType,
+          job_description: values.jobDescription.trim(),
+          quotation_goal: values.quotationGoal.trim(),
+          target_total_ngn: targetTotal,
+          profile,
+          client,
+        });
+        if (
+          draft.target_total_ngn !== targetTotal
+          || draft.suggested_total_ngn !== targetTotal
+          || draft.understanding.financials.grand_total !== targetTotal
+          || !draft.understanding.financials.consistent
+        ) {
+          throw new Error(
+            'The draft did not preserve your exact proposal total. Nothing was changed; the previous document is unchanged.',
+          );
         }
-        const blob = new Blob([bytes], { type: 'application/pdf' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = event.data.fileName
-          || `${understanding?.title || 'quoteGEN-proposal'}-corrected.pdf`;
-        link.click();
-        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-        setPdfEditorError('');
-        pdfEditorFrame.current?.contentWindow?.postMessage({
-          type: 'pdfzero:downloaded',
-        }, window.location.origin);
-      } else if (event.data.type === 'pdfzero:close') {
-        setPdfEditorOpen(false);
-      } else if (event.data.type === 'pdfzero:error') {
-        setPdfEditorError(typeof event.data.message === 'string'
-          ? event.data.message : 'The PDF editor could not complete that operation.');
+        nextUnderstanding = draft.understanding;
+        rawInput = draft.quotation_text;
+        nextMissing = draft.missing_info;
+        nextEngine = { usedAi: true, model: draft.model };
+        nextJobTotals = { total: draft.suggested_total_ngn, target: draft.target_total_ngn };
+      } else {
+        const response = await api.understand(values.text, 'paste', profile, client);
+        nextUnderstanding = response.understanding;
+        rawInput = values.text;
+        nextEngine = { usedAi: response.used_ai, model: response.model };
       }
-    };
-    window.addEventListener('message', onEditorMessage);
-    return () => window.removeEventListener('message', onEditorMessage);
-  }, [pdfEditorOpen, pdfUrl, understanding?.title]);
+
+      setBusy('generate');
+      const response = await api.generate(
+        buildPayload(
+          nextUnderstanding, profile, client, rawInput, documentId,
+          values.kind, nextMissing,
+          values.kind === 'job' ? values.jobDescription.trim() : '',
+          values.kind === 'job' ? values.cleaningType : null,
+          values.kind === 'job' ? values.quotationGoal.trim() : '',
+        ),
+      );
+
+      setUnderstanding(nextUnderstanding);
+      setDocumentId(response.document_id);
+      setPdfUrl(response.pdf_url);
+      setPages(response.preview_urls);
+
+      if (values.kind === 'job') {
+        setText(rawInput);
+        setInputMode('job');
+        setGeneratedFromJob(true);
+        setJobDescription(values.jobDescription);
+        setQuotationGoal(values.quotationGoal);
+        setCleaningType(values.cleaningType);
+        setTargetTotalNgn(values.targetTotalNgn);
+        setJobMissingInfo(nextMissing);
+        if (nextJobTotals) setJobTotals(nextJobTotals);
+        setJobEstimateNotice(
+          'The proposal total is fixed at the amount entered when this draft was created.',
+        );
+      } else {
+        setText(values.text);
+      }
+      if (nextEngine) setEngine(nextEngine);
+
+      rememberOriginal(values);
+      setInstructionsOpen(false);
+      onSaved();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 402) {
+        setQuotaExhausted(true);
+        if (typeof e.detail === 'object' && e.detail?.monthly_price_ngn) {
+          setMonthlyPrice(e.detail.monthly_price_ngn);
+        }
+        setInstructionsOpen(false);
+      } else {
+        setInstructionsError(
+          e instanceof Error ? e.message : 'Unable to regenerate the document.',
+        );
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const updateDraftBlocks = (blocks: SemanticBlock[]) => {
     setDraftUnderstanding((current) => current ? { ...current, blocks } : current);
@@ -320,6 +373,7 @@ export function CreateQuotation({
           generatedFromJob ? 'job' : inputMode, jobMissingInfo,
           generatedFromJob ? jobDescription : '',
           generatedFromJob ? cleaningType : null,
+          generatedFromJob ? quotationGoal : '',
         ),
       );
       setUnderstanding(draftUnderstanding);
@@ -634,12 +688,8 @@ export function CreateQuotation({
                 </button>
               )}
               <button type="button" className="btn"
-                onClick={() => {
-                  pdfEditorFileSent.current = false;
-                  setPdfEditorError('');
-                  setPdfEditorOpen(true);
-                }}>
-                <Pencil size={15} /> Edit PDF
+                onClick={openInstructions}>
+                <Pencil size={15} /> Edit &amp; Regenerate
               </button>
               <button type="button" className="btn ml-auto"
                 onClick={() => { void downloadAuthenticatedAsset(
@@ -657,33 +707,14 @@ export function CreateQuotation({
         </div>
       </div>
     </div>
-    {pdfEditorOpen && (
-      <div className="fixed inset-0 z-50 bg-black/70 p-3 sm:p-6"
-        role="dialog" aria-modal="true" aria-label="Edit generated PDF">
-        <div className="mx-auto flex h-full max-w-[1600px] flex-col overflow-hidden rounded-xl bg-[var(--surface)] shadow-2xl">
-          <div className="flex items-center justify-between gap-4 border-b border-[var(--border)] px-4 py-3">
-            <div>
-              <h2 className="font-semibold">Edit generated PDF</h2>
-              <p className="text-xs text-[var(--text-muted)]">
-                Edits stay in this browser. Review every page before downloading; complex backgrounds and fonts may not reproduce exactly.
-              </p>
-            </div>
-            <button type="button" className="btn" onClick={() => setPdfEditorOpen(false)}
-              aria-label="Close PDF editor">
-              <X size={16} /> Close
-            </button>
-          </div>
-          {pdfEditorError && (
-            <p className="px-4 py-2 text-sm text-[var(--error)]" role="alert">{pdfEditorError}</p>
-          )}
-          <iframe
-            ref={pdfEditorFrame}
-            title="PDFZero editor"
-            src="/pdf-editor/"
-            className="min-h-0 w-full flex-1 border-0"
-          />
-        </div>
-      </div>
+    {instructionsOpen && (
+      <EditInstructions
+        original={originalInstructions ?? currentInstructionValues()}
+        busy={Boolean(busy)}
+        error={instructionsError}
+        onCancel={() => { if (!busy) setInstructionsOpen(false); }}
+        onRegenerate={(values) => { void regenerateFromInstructions(values); }}
+      />
     )}
     </>
   );
