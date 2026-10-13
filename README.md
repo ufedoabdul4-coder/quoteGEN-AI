@@ -96,7 +96,10 @@ to the target before rendering the proposal with the same master-template
 design and saving it as a document. The
 AI-generated prices are estimates, not a rate card; review every line against
 approved rates before sending. The active master must be a text-searchable PDF.
-Job drafting requires `GEMINI_API_KEY` on the backend.
+Job drafting requires `GEMINI_API_KEY` on the backend. If Gemini returns a
+429 rate-limit response with a short retry delay, the backend waits and retries
+once on the same model. Longer quota waits are returned to the user without
+switching credentials or models; the job details remain in the form for retry.
 
 In Render, set these backend environment variables:
 

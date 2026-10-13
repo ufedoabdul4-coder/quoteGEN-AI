@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
 from datetime import date
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 
 import httpx
 import pymupdf
@@ -18,6 +21,7 @@ from services import classify, store, understanding as deterministic
 logger = logging.getLogger(__name__)
 
 _MODELS = ("gemini-3.8-flash", "gemini-flash-latest")
+_MAX_AUTOMATIC_429_WAIT_SECONDS = 3.0
 _CLEANING_TYPE_LABELS = {
     "residential_deep_cleaning": "Residential deep cleaning",
     "regular_house_cleaning": "Regular house cleaning",
@@ -498,6 +502,52 @@ def _provider_error_detail(response: httpx.Response, *, api_key: str) -> str:
     return detail[:500]
 
 
+def _provider_retry_after_seconds(response: httpx.Response) -> float | None:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                pass
+
+    try:
+        error = response.json().get("error", {})
+    except (ValueError, AttributeError):
+        return None
+    details = error.get("details", []) if isinstance(error, dict) else []
+    if not isinstance(details, list):
+        return None
+    for detail in details:
+        if not isinstance(detail, dict) or not str(detail.get("@type", "")).endswith(
+            "google.rpc.RetryInfo",
+        ):
+            continue
+        value = detail.get("retryDelay")
+        if not isinstance(value, str):
+            continue
+        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)s\s*", value)
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def _transport_error_message(exc: httpx.HTTPError) -> str:
+    error_type = type(exc).__name__
+    if isinstance(exc, httpx.TimeoutException):
+        return f"Gemini request timed out ({error_type})."
+    detail = re.sub(r"\s+", " ", str(exc)).strip()
+    return (
+        f"Could not complete the Gemini request ({error_type}): {detail}"
+        if detail else f"Could not complete the Gemini request ({error_type})."
+    )
+
+
 def _generation_response_schema(cleaning_type: str) -> dict:
     text_list = {"type": "ARRAY", "items": {"type": "STRING"}}
     cost_item = {
@@ -703,22 +753,56 @@ server computes them."""
 
     preferred = (os.getenv("GEMINI_MODEL") or _MODELS[0]).strip()
     candidates = [preferred, *[model for model in _MODELS if model != preferred]][:2]
-    last_error = ""
+    errors: list[tuple[str, str, bool]] = []
     for model in candidates:
         try:
             async with httpx.AsyncClient(timeout=30.0) as http:
-                response = await http.post(
-                    _ENDPOINT.format(model=model),
-                    headers={"x-goog-api-key": key},
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {
-                            "temperature": 0.2,
-                            "responseMimeType": "application/json",
-                            "responseSchema": _generation_response_schema(cleaning_type),
-                            "maxOutputTokens": 3000,
+                for attempt in range(2):
+                    response = await http.post(
+                        _ENDPOINT.format(model=model),
+                        headers={"x-goog-api-key": key},
+                        json={
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "generationConfig": {
+                                "temperature": 0.2,
+                                "responseMimeType": "application/json",
+                                "responseSchema": _generation_response_schema(cleaning_type),
+                                "maxOutputTokens": 3000,
+                            },
                         },
-                    },
+                    )
+                    if response.status_code != 429:
+                        break
+                    retry_after = _provider_retry_after_seconds(response)
+                    if (
+                        attempt == 0
+                        and retry_after is not None
+                        and retry_after <= _MAX_AUTOMATIC_429_WAIT_SECONDS
+                    ):
+                        logger.info(
+                            "Gemini rate limited %s; retrying once after %.2f seconds",
+                            model,
+                            retry_after,
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+                    break
+
+            if response.status_code == 429:
+                detail = _provider_error_detail(response, api_key=key)
+                suffix = f" Provider detail: {detail.rstrip('. ')}." if detail else ""
+                retry_after = _provider_retry_after_seconds(response)
+                if retry_after is not None:
+                    retry_hint = (
+                        f" Try again in about {max(1, int(retry_after + 0.999))} "
+                        "seconds."
+                    )
+                else:
+                    retry_hint = " Try again after the quota or rate limit resets."
+                raise JobDraftError(
+                    "Gemini is temporarily rate-limiting this request (HTTP 429)."
+                    f"{suffix}{retry_hint} Your entered job details are still in the form.",
+                    status_code=429,
                 )
             if response.status_code != 200:
                 detail = _provider_error_detail(response, api_key=key)
@@ -746,12 +830,37 @@ server computes them."""
                 "model": model,
                 "notice": _NOTICE,
             }
-        except (httpx.HTTPError, JobDraftError) as exc:
-            last_error = str(exc)
-            logger.warning("Job quotation drafting with %s failed: %s", model, exc)
+        except JobDraftError as exc:
+            if exc.status_code == 429:
+                raise
+            message = str(exc).strip() or f"{type(exc).__name__} (no detail)"
+            errors.append((model, message, False))
+            logger.warning(
+                "Job quotation drafting with %s failed (%s): %s",
+                model,
+                type(exc).__name__,
+                message,
+            )
+        except httpx.TimeoutException as exc:
+            message = _transport_error_message(exc)
+            errors.append((model, message, True))
+            logger.warning("Job quotation drafting with %s failed: %s", model, message)
+        except httpx.HTTPError as exc:
+            message = _transport_error_message(exc)
+            errors.append((model, message, False))
+            logger.warning("Job quotation drafting with %s failed: %s", model, message)
 
+    if errors:
+        error_summary = "; ".join(
+            f"{model}: {message}" for model, message, _is_timeout in errors
+        )
+        status_code = 504 if all(is_timeout for _, _, is_timeout in errors) else 502
+    else:
+        error_summary = "the provider returned an empty response with no error details"
+        status_code = 502
     raise JobDraftError(
         "The AI draft did not meet the proposal requirements: "
-        f"{last_error or 'the provider returned an unusable response'} "
-        "Please try again."
+        f"{error_summary} Please try again."
+        " Your entered job details are still in the form.",
+        status_code=status_code,
     )

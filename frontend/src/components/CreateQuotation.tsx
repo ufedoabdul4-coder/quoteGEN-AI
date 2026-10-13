@@ -493,7 +493,8 @@ export function CreateQuotation({
                 {busy === 'draft' ? 'Drafting proposal…'
                   : busy === 'understand' ? 'Preparing proposal…'
                     : busy === 'generate' ? 'Generating document…'
-                      : pdfUrl ? 'Draft again & generate' : 'Draft & generate proposal'}
+                      : error.includes('HTTP 429') ? 'Retry proposal generation'
+                        : pdfUrl ? 'Draft again & generate' : 'Draft & generate proposal'}
               </button>
               {engine?.usedAi && (
                 <p className="text-xs text-[var(--text-muted)]">Drafted by {engine.model || 'AI'}</p>

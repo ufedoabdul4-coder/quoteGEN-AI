@@ -170,6 +170,32 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("GEMINI_API_KEY", response.json()["detail"])
 
+    def test_job_draft_preserves_retryable_provider_rate_limit_response(self):
+        with (
+            mock.patch.object(
+                main.job_draft, "active_master_reference",
+                return_value="Master proposal reference",
+            ),
+            mock.patch.object(
+                main.job_draft,
+                "draft_quotation",
+                new=mock.AsyncMock(side_effect=main.job_draft.JobDraftError(
+                    "Gemini is temporarily rate-limiting this request (HTTP 429). "
+                    "Try again in about 60 seconds. Your entered job details are still in the form.",
+                    status_code=429,
+                )),
+            ),
+        ):
+            response = self.client.post("/job-draft", json={
+                "job_description": "Three bedrooms and a kitchen",
+                "quotation_goal": "A detailed cleaning proposal",
+                "target_total_ngn": 850000,
+            })
+
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("Try again in about 60 seconds", response.json()["detail"])
+        self.assertIn("job details are still in the form", response.json()["detail"])
+
     def test_job_draft_rejects_nonpositive_budget(self):
         response = self.client.post("/job-draft", json={
             "job_description": "Three bedrooms and a kitchen",

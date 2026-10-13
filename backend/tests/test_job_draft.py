@@ -427,13 +427,19 @@ class JobDraftTests(unittest.TestCase):
 
     def test_provider_quota_error_is_exposed_without_leaking_api_key(self):
         original_client = httpx.AsyncClient
+        requests = []
 
-        async def provider(_request):
+        async def provider(request):
+            requests.append(request)
             return httpx.Response(
                 429,
                 json={"error": {
                     "message": "Quota exceeded for key test-key; retry later.",
                     "status": "RESOURCE_EXHAUSTED",
+                    "details": [{
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "60s",
+                    }],
                 }},
             )
 
@@ -451,7 +457,8 @@ class JobDraftTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 JobDraftError,
-                r"HTTP 429: Quota exceeded for key \[redacted\]; retry later",
+                r"Gemini is temporarily rate-limiting.*Quota exceeded for key "
+                r"\[redacted\].*Try again in about 60 seconds",
             ) as raised:
                 asyncio.run(job_draft.draft_quotation(
                     job_description="Bedrooms and bathrooms",
@@ -463,3 +470,89 @@ class JobDraftTests(unittest.TestCase):
                 ))
 
         self.assertNotIn("test-key", str(raised.exception))
+        self.assertEqual(raised.exception.status_code, 429)
+        self.assertEqual(len(requests), 1)
+
+    def test_short_gemini_retry_after_is_retried_once_on_same_model(self):
+        original_client = httpx.AsyncClient
+        requests = []
+
+        async def provider(request):
+            requests.append(request)
+            if len(requests) == 1:
+                return httpx.Response(
+                    429,
+                    json={"error": {"details": [{
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "0.01s",
+                    }]}},
+                )
+            return httpx.Response(
+                200,
+                json={"candidates": [{
+                    "content": {"parts": [{"text": json.dumps(self.data)}]},
+                }]},
+            )
+
+        transport = httpx.MockTransport(provider)
+        with (
+            mock.patch.dict(os.environ, {
+                "GEMINI_API_KEY": "test-key",
+                "GEMINI_MODEL": "test-model",
+            }),
+            mock.patch.object(
+                job_draft.httpx,
+                "AsyncClient",
+                side_effect=lambda timeout: original_client(timeout=timeout, transport=transport),
+            ),
+        ):
+            result = asyncio.run(job_draft.draft_quotation(
+                job_description="Bedrooms and bathrooms",
+                quotation_goal="A detailed cleaning proposal",
+                target_total_ngn=800000,
+                profile=BusinessProfile(),
+                client=ClientInfo(),
+                master_reference="Bedroom cleaning; old price [price omitted]",
+            ))
+
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(all("test-model" in request.url.path for request in requests))
+        self.assertEqual(result["suggested_total_ngn"], 800000)
+
+    def test_empty_text_timeout_is_reported_with_model_and_exception_type(self):
+        original_client = httpx.AsyncClient
+        requested_models = []
+
+        async def provider(request):
+            model = request.url.path.split("/")[-1].split(":")[0]
+            requested_models.append(model)
+            raise httpx.ReadTimeout("read timed out", request=request)
+
+        transport = httpx.MockTransport(provider)
+        with (
+            mock.patch.dict(os.environ, {
+                "GEMINI_API_KEY": "test-key",
+                "GEMINI_MODEL": "test-model",
+            }),
+            mock.patch.object(
+                job_draft.httpx,
+                "AsyncClient",
+                side_effect=lambda timeout: original_client(timeout=timeout, transport=transport),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                JobDraftError,
+                r"test-model: Gemini request timed out \(ReadTimeout\).*"
+                r"gemini-3\.8-flash: Gemini request timed out \(ReadTimeout\)",
+            ) as raised:
+                asyncio.run(job_draft.draft_quotation(
+                    job_description="Bedrooms and bathrooms",
+                    quotation_goal="A detailed cleaning proposal",
+                    target_total_ngn=800000,
+                    profile=BusinessProfile(),
+                    client=ClientInfo(),
+                    master_reference="Bedroom cleaning reference",
+                ))
+
+        self.assertEqual(raised.exception.status_code, 504)
+        self.assertEqual(requested_models, ["test-model", "gemini-3.8-flash"])
