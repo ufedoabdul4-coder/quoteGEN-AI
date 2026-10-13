@@ -438,6 +438,9 @@ class JobDraftTests(unittest.TestCase):
         self.assertIn("The selected cleaning type in the input is authoritative", captured_prompts[0])
         self.assertIn("Residential deep cleaning and regular house cleaning do not imply", captured_prompts[0])
         self.assertIn("Include those additional services only when explicitly selected or requested.", captured_prompts[0])
+        self.assertIn("Match the master proposal's professional voice", captured_prompts[0])
+        self.assertIn("Do not narrate the prompt or say", captured_prompts[0])
+        self.assertIn("the client requires", captured_prompts[0])
         self.assertIn("800000", captured_prompts[0])
         self.assertEqual(
             captured_schemas[0]["properties"]["service_type"]["enum"],

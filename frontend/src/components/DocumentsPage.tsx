@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FileText, Download, Trash, Pencil, CircleCheck, TriangleAlert, CircleAlert } from 'lucide-react';
 import type { DocumentSummary } from '../types';
-import { openAuthenticatedAsset } from '../services/api';
+import { downloadAuthenticatedAsset } from '../services/api';
 
 const STATUS: Record<string, { label: string; cls: string; icon: typeof CircleCheck }> = {
   ready: { label: 'Ready', cls: 'chip-ok', icon: CircleCheck },
@@ -18,12 +18,12 @@ interface Props {
 
 export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) {
   const [error, setError] = useState('');
-  const openPdf = async (path: string) => {
+  const downloadPdf = async (path: string, title: string) => {
     setError('');
     try {
-      await openAuthenticatedAsset(path);
+      await downloadAuthenticatedAsset(path, `${title || 'quoteGEN-proposal'}.pdf`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to open the PDF.');
+      setError(err instanceof Error ? err.message : 'Unable to download the PDF.');
     }
   };
 
@@ -72,7 +72,7 @@ export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) 
                 </button>
                 {doc.pdf_url && (
                   <button type="button" className="btn px-2 py-1"
-                    onClick={() => { void openPdf(doc.pdf_url!); }} aria-label="Open PDF">
+                      onClick={() => { void downloadPdf(doc.pdf_url!, doc.title); }} aria-label="Download PDF">
                     <Download size={14} />
                   </button>
                 )}

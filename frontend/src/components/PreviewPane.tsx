@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Download, Eye } from 'lucide-react';
-import { authenticatedAsset, openAuthenticatedAsset } from '../services/api';
+import {
+  authenticatedAsset, downloadAuthenticatedAsset,
+} from '../services/api';
 
 interface Props {
   pages: string[];
@@ -13,7 +15,7 @@ export function PreviewPane({ pages, pdfUrl, title, emptyHint }: Props) {
   const [index, setIndex] = useState(0);
   const [loadedPages, setLoadedPages] = useState<{ key: string; urls: string[] } | null>(null);
   const [assetError, setAssetError] = useState<{ key: string; message: string } | null>(null);
-  const [openingPdf, setOpeningPdf] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const pageKey = pages.join('|');
   const currentPages = loadedPages?.key === pageKey ? loadedPages.urls : [];
   const currentError = assetError?.key === pageKey ? assetError.message : '';
@@ -46,19 +48,19 @@ export function PreviewPane({ pages, pdfUrl, title, emptyHint }: Props) {
     };
   }, [pageKey]);
 
-  const openPdf = async () => {
+  const downloadPdf = async () => {
     if (!pdfUrl) return;
-    setOpeningPdf(true);
+    setDownloadingPdf(true);
     setAssetError(null);
     try {
-      await openAuthenticatedAsset(pdfUrl);
+      await downloadAuthenticatedAsset(pdfUrl, `${title || 'quoteGEN-proposal'}.pdf`);
     } catch (error) {
       setAssetError({
         key: pageKey,
-        message: error instanceof Error ? error.message : 'Unable to open the PDF.',
+        message: error instanceof Error ? error.message : 'Unable to download the PDF.',
       });
     } finally {
-      setOpeningPdf(false);
+      setDownloadingPdf(false);
     }
   };
 
@@ -93,8 +95,8 @@ export function PreviewPane({ pages, pdfUrl, title, emptyHint }: Props) {
             <ChevronRight size={16} />
           </button>
           {pdfUrl && (
-            <button type="button" className="btn px-2 py-1 ml-1" onClick={() => { void openPdf(); }}
-              disabled={openingPdf}>
+            <button type="button" className="btn px-2 py-1 ml-1" onClick={() => { void downloadPdf(); }}
+              disabled={downloadingPdf}>
               <Download size={15} />
               <span className="hidden sm:inline">PDF</span>
             </button>

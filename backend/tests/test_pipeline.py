@@ -111,6 +111,30 @@ class UnderstandingTests(unittest.TestCase):
         self.assertEqual(face.sanitize("₦25,000"), "NGN 25,000")
         self.assertGreater(face.text_length("₦25,000", 10), face.text_length("25,000", 10))
 
+    def test_base14_fallback_transliterates_punctuation_and_symbols_without_question_marks(self):
+        from services.fonts import FontFace
+
+        face = FontFace(
+            display="Helvetica",
+            family="helvetica",
+            bold=False,
+            italic=False,
+            base14="helv",
+        )
+
+        safe = face.sanitize("The client’s café — ready… ✓ 🧹")
+        self.assertEqual(safe, "The client's café - ready... [check] [broom]")
+        self.assertNotIn("?", safe)
+        document = pymupdf.open()
+        page = document.new_page()
+        page.insert_text((40, 40), safe, fontname="helv", fontsize=11)
+        pdf_bytes = document.tobytes()
+        document.close()
+        with pymupdf.open(stream=pdf_bytes, filetype="pdf") as rendered:
+            extracted = rendered[0].get_text()
+        self.assertIn(safe, extracted)
+        self.assertNotIn("?", extracted)
+
 
 class FidelityTests(unittest.TestCase):
     """Source words and case survive; headings and totals are never dropped."""

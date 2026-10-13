@@ -107,6 +107,27 @@ export async function openAuthenticatedAsset(path: string): Promise<void> {
   }
 }
 
+export async function downloadAuthenticatedAsset(
+  path: string,
+  filename: string,
+): Promise<void> {
+  const blob = await authenticatedAsset(path);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = [...filename].map((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 || code === 127 || '<>:"/\\|?*'.includes(character)
+      ? '_'
+      : character;
+  }).join('') || 'document.pdf';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 export const api = {
   health: () => request<{ status: string }>('/health'),
 

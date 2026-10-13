@@ -6,7 +6,7 @@ import type {
   BusinessProfile, CleaningServiceType, ClientInfo, DocumentRecord, GenerateRequest, TemplateMeta,
   SemanticBlock, Understanding,
 } from '../types';
-import { api, ApiError, openAuthenticatedAsset } from '../services/api';
+import { api, ApiError, downloadAuthenticatedAsset } from '../services/api';
 import { PreviewPane } from './PreviewPane';
 import { BlockEditor } from './BlockEditor';
 import { useAuth } from '../services/auth';
@@ -559,8 +559,11 @@ export function CreateQuotation({
                 </button>
               )}
               <button type="button" className="btn ml-auto"
-                onClick={() => { void openAuthenticatedAsset(pdfUrl).catch((e: unknown) => {
-                  setError(e instanceof Error ? e.message : 'Unable to open the PDF.');
+                onClick={() => { void downloadAuthenticatedAsset(
+                  pdfUrl,
+                  `${understanding?.title || 'quoteGEN-proposal'}.pdf`,
+                ).catch((e: unknown) => {
+                  setError(e instanceof Error ? e.message : 'Unable to download the PDF.');
                 }); }}>
                 <Download size={15} /> Download
               </button>

@@ -15,6 +15,7 @@ text equivalent where one exists.
 from __future__ import annotations
 
 import os
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -41,7 +42,40 @@ _GLYPH_FALLBACKS = {
     "”": '"',
     "‘": "'",
     "’": "'",
+    "…": "...",
+    "‐": "-",
+    "‑": "-",
+    "‒": "-",
+    "―": "-",
+    "′": "'",
+    "″": '"',
+    "✓": "[check]",
+    "✔": "[check]",
+    "✗": "[x]",
+    "✘": "[x]",
+    "☑": "[checked]",
+    "☐": "[ ]",
+    "⚠": "[warning]",
+    "×": "x",
+    "÷": "/",
+    "≤": "<=",
+    "≥": ">=",
 }
+
+
+def _fallback_glyph(ch: str) -> str:
+    fallback = _GLYPH_FALLBACKS.get(ch)
+    if fallback is not None:
+        return fallback
+    decomposed = unicodedata.normalize("NFKD", ch)
+    fallback = "".join(
+        char for char in decomposed
+        if ord(char) < 128 and not unicodedata.combining(char)
+    ).strip()
+    if fallback:
+        return fallback
+    name = unicodedata.name(ch, "")
+    return f"[{name.lower().replace('-', ' ')}]" if name else " "
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +184,9 @@ class FontFace:
             return 0.0
         try:
             safe_text = "".join(
-                ch if self.has_glyph(ch) else _GLYPH_FALLBACKS.get(ch, "?")
+                _fallback_glyph(ch)
+                if not self.has_glyph(ch) or (self.base14 and ch in _GLYPH_FALLBACKS)
+                else ch
                 for ch in text
             )
             return float(self._font.text_length(safe_text, fontsize=size))
@@ -174,15 +210,22 @@ class FontFace:
     def sanitize(self, text: str) -> str:
         """Replace unsupported glyphs with readable text, recording each one.
 
-        Unknown glyphs remain visibly marked with ``?`` rather than disappearing.
+        Unsupported Latin accents are transliterated, and unsupported symbols
+        use a readable Unicode-name fallback instead of becoming question marks.
         """
         out_chars: List[str] = []
         for ch in text:
-            if ch in ("\n", "\t", "\r") or self.has_glyph(ch):
+            fallback = _GLYPH_FALLBACKS.get(ch)
+            if ch in ("\n", "\t", "\r"):
+                out_chars.append(ch)
+            elif self.base14 and fallback is not None:
+                self._missing[ch] = self._missing.get(ch, 0) + 1
+                out_chars.append(fallback)
+            elif self.has_glyph(ch):
                 out_chars.append(ch)
             else:
                 self._missing[ch] = self._missing.get(ch, 0) + 1
-                out_chars.append(_GLYPH_FALLBACKS.get(ch, "?"))
+                out_chars.append(_fallback_glyph(ch))
         return "".join(out_chars)
 
     def missing_glyphs(self) -> Dict[str, int]:
