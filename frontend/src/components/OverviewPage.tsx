@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FileText, FileStack, Sparkles, Download, ArrowRight } from 'lucide-react';
+import { FileText, FileStack, Sparkles, Download, ArrowRight, LoaderCircle, Zap } from 'lucide-react';
 import type { BillingStatus, DocumentSummary } from '../types';
 import { openAuthenticatedAsset } from '../services/api';
 
@@ -12,11 +12,15 @@ interface Props {
   onCreate: () => void;
   onOpenDocuments: () => void;
   onOpenTemplates: () => void;
+  onUpgrade: () => void;
+  upgradeBusy: boolean;
+  upgradeError: string;
 }
 
 export function OverviewPage({
   documents, billingStatus, billingLoadError, onRetryBilling, templateCount,
   onCreate, onOpenDocuments, onOpenTemplates,
+  onUpgrade, upgradeBusy, upgradeError,
 }: Props) {
   const [error, setError] = useState('');
   const recent = documents.slice(0, 5);
@@ -44,7 +48,14 @@ export function OverviewPage({
       </header>
       {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
 
-      <UsageCard status={billingStatus} error={billingLoadError} onRetry={onRetryBilling} />
+      <UsageCard
+        status={billingStatus}
+        error={billingLoadError}
+        onRetry={onRetryBilling}
+        onUpgrade={onUpgrade}
+        upgradeBusy={upgradeBusy}
+        upgradeError={upgradeError}
+      />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <StatCard icon={FileText} label="Documents" value={documents.length}
@@ -91,8 +102,15 @@ export function OverviewPage({
 }
 
 function UsageCard({
-  status, error, onRetry,
-}: { status: BillingStatus | null; error: string; onRetry: () => void }) {
+  status, error, onRetry, onUpgrade, upgradeBusy, upgradeError,
+}: {
+  status: BillingStatus | null;
+  error: string;
+  onRetry: () => void;
+  onUpgrade: () => void;
+  upgradeBusy: boolean;
+  upgradeError: string;
+}) {
   if (!status) {
     return (
       <section className="card flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-[var(--text-muted)]" aria-label="PDF generation usage">
@@ -115,13 +133,33 @@ function UsageCard({
           {status.paid_until ? new Date(status.paid_until).toLocaleDateString() : 'the end of your plan'}.
         </p>
       ) : (
-        <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--text-muted)]">
-          <span>
-            Rolling 30-day free usage: {status.free_used} / {status.free_limit}
-          </span>
-          <span>
-            Free PDFs today (UTC): {status.free_used_today} / {status.free_daily_limit}
-          </span>
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--text-muted)]">
+            <span>
+              Rolling 30-day free usage: {status.free_used} / {status.free_limit}
+            </span>
+            <span>
+              Free PDFs today (UTC): {status.free_used_today} / {status.free_daily_limit}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onUpgrade}
+              disabled={upgradeBusy}
+            >
+              {upgradeBusy ? <LoaderCircle size={15} className="spin" /> : <Zap size={15} />}
+              {upgradeBusy ? 'Opening checkout…' : 'Want unlimited? Click here'}
+            </button>
+            <span className="text-xs text-[var(--text-muted)]">
+              Unlimited proposals for one month for{' '}
+              ₦{status.monthly_price_ngn.toLocaleString('en-NG')}. One-time payment, no auto-renew.
+            </span>
+          </div>
+          {upgradeError && (
+            <p role="alert" className="text-xs text-[var(--error)]">{upgradeError}</p>
+          )}
         </div>
       )}
     </section>

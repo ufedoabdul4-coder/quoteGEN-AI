@@ -33,7 +33,8 @@ export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) 
         <div>
           <h1 className="text-lg font-semibold">My documents</h1>
           <p className="text-xs text-[var(--text-muted)]">
-            {documents.length} saved proposal{documents.length === 1 ? '' : 's'}
+            {documents.length} saved proposal{documents.length === 1 ? '' : 's'} · proposals are
+            deleted automatically 3 days after they are saved
           </p>
         </div>
         <button type="button" className="btn btn-primary" onClick={onCreate}>
@@ -54,32 +55,34 @@ export function DocumentsPage({ documents, onOpen, onDelete, onCreate }: Props) 
             const StatusIcon = status.icon;
             return (
               <div key={doc.id}
-                className="flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface-2)] transition">
+                className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 hover:bg-[var(--surface-2)] transition">
                 <FileText size={18} className="text-[var(--text-dim)] shrink-0" />
                 <button type="button" onClick={() => onOpen(doc.id)}
                   className="min-w-0 flex-1 text-left" aria-label={`Edit ${doc.title}`}>
-                  <div className="text-sm font-semibold truncate">{doc.title}</div>
-                  <div className="text-xs text-[var(--text-dim)] truncate">
+                  <div className="text-sm font-semibold break-words">{doc.title}</div>
+                  <div className="text-xs text-[var(--text-dim)] break-words">
                     {doc.client || 'No client'} · {doc.page_count} page(s) · {fmt(doc.updated_at)}
                   </div>
                 </button>
-                <span className={`chip ${status.cls}`}>
-                  <StatusIcon size={12} /> {status.label}
-                </span>
-                <button type="button" className="btn px-2 py-1"
-                  onClick={() => onOpen(doc.id)} aria-label="Edit proposal">
-                  <Pencil size={14} />
-                </button>
-                {doc.pdf_url && (
+                <div className="flex w-full shrink-0 items-center gap-2 border-t border-[var(--border)] pt-2 sm:w-auto sm:border-0 sm:pt-0">
+                  <span className={`chip ${status.cls}`}>
+                    <StatusIcon size={12} /> {status.label}
+                  </span>
                   <button type="button" className="btn px-2 py-1"
-                      onClick={() => { void downloadPdf(doc.pdf_url!, doc.title); }} aria-label="Download PDF">
-                    <Download size={14} />
+                    onClick={() => onOpen(doc.id)} aria-label="Edit proposal">
+                    <Pencil size={14} />
                   </button>
-                )}
-                <button type="button" className="btn btn-danger px-2 py-1"
-                  onClick={() => onDelete(doc.id)} aria-label="Delete document">
-                  <Trash size={14} />
-                </button>
+                  {doc.pdf_url && (
+                    <button type="button" className="btn px-2 py-1"
+                        onClick={() => { void downloadPdf(doc.pdf_url!, doc.title); }} aria-label="Download PDF">
+                      <Download size={14} />
+                    </button>
+                  )}
+                  <button type="button" className="btn btn-danger px-2 py-1 ml-auto sm:ml-0"
+                    onClick={() => onDelete(doc.id)} aria-label="Delete document">
+                    <Trash size={14} />
+                  </button>
+                </div>
               </div>
             );
           })}

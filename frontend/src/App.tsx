@@ -54,6 +54,8 @@ export default function App() {
   const [activeTemplate, setActiveTemplate] = useState<TemplateMeta | null>(null);
   const [activeDocument, setActiveDocument] = useState<DocumentRecord | null>(null);
   const [signOutError, setSignOutError] = useState('');
+  const [upgradeBusy, setUpgradeBusy] = useState(false);
+  const [upgradeError, setUpgradeError] = useState('');
 
   const handleSignOut = async () => {
     setSignOutError('');
@@ -257,6 +259,26 @@ export default function App() {
     await loadDocuments();
   };
 
+  const startUpgrade = async () => {
+    if (!email) {
+      setUpgradeError('Could not identify your signed-in email. Please sign in again.');
+      return;
+    }
+    setUpgradeBusy(true);
+    setUpgradeError('');
+    try {
+      const fullName = session?.user.user_metadata?.full_name;
+      const result = await api.billingCheckout(
+        email,
+        typeof fullName === 'string' ? fullName : '',
+      );
+      window.location.assign(result.checkout_url);
+    } catch (error) {
+      setUpgradeError(error instanceof Error ? error.message : 'Unable to start payment.');
+      setUpgradeBusy(false);
+    }
+  };
+
   const navigateMobile = (nextRoute: Route) => {
     setRoute(nextRoute);
     setMobileMenuOpen(false);
@@ -357,6 +379,9 @@ export default function App() {
               onCreate={openCreate}
               onOpenDocuments={() => setRoute('documents')}
               onOpenTemplates={() => setRoute('templates')}
+              onUpgrade={() => { void startUpgrade(); }}
+              upgradeBusy={upgradeBusy}
+              upgradeError={upgradeError}
             />
           )}
 

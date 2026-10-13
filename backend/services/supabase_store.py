@@ -11,6 +11,7 @@ two people using the hosted app never see each other's data.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -31,6 +32,8 @@ DOCUMENTS_TABLE = "documents"
 REFERENCES_TABLE = "references"
 SETTINGS_TABLE = "settings"
 PROFILES_TABLE = "profiles"
+
+RETENTION_DAYS = int(os.environ.get("DOCUMENT_RETENTION_DAYS", "3"))
 
 
 def _now() -> str:
@@ -108,8 +111,41 @@ def get_document(document_id: str) -> DocumentRecord | None:
         return None
 
 
+def _age_days(stamp: str | None, now: float) -> float | None:
+    if not stamp:
+        return None
+    try:
+        created = time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+    return (now - created) / 86400.0
+
+
+def purge_expired_documents(max_age_days: int = RETENTION_DAYS) -> int:
+    """Delete the current user's proposals older than ``max_age_days``."""
+    user_id = require_current_user()
+    try:
+        result = (
+            _client()
+            .table(DOCUMENTS_TABLE)
+            .select("id,created_at,updated_at")
+            .eq("user_id", user_id)
+            .execute()
+        )
+    except Exception:
+        return 0
+    removed = 0
+    now = time.time()
+    for row in result.data or []:
+        age = _age_days(row.get("created_at") or row.get("updated_at"), now)
+        if age is not None and age >= max_age_days and delete_document(row.get("id")):
+            removed += 1
+    return removed
+
+
 def list_documents() -> list[DocumentRecord]:
     user_id = require_current_user()
+    purge_expired_documents()
     result = (
         _client()
         .table(DOCUMENTS_TABLE)

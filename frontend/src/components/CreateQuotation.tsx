@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Sparkles, LoaderCircle, Download, ScanText, Pencil, X, Check,
 } from 'lucide-react';
@@ -11,8 +11,6 @@ import {
 } from '../services/api';
 import { PreviewPane } from './PreviewPane';
 import { BlockEditor } from './BlockEditor';
-import { EditInstructions } from './EditInstructions';
-import type { InstructionValues } from './EditInstructions';
 import { CLEANING_SERVICES, isCleaningServiceType } from '../utils/cleaning';
 import { useAuth } from '../services/auth';
 
@@ -114,9 +112,7 @@ export function CreateQuotation({
     initialDocument?.preview_url ? [initialDocument.preview_url] : [],
   );
   const [pdfUrl, setPdfUrl] = useState(initialDocument?.pdf_url || '');
-  const [instructionsOpen, setInstructionsOpen] = useState(false);
-  const [instructionsError, setInstructionsError] = useState('');
-  const [originalInstructions, setOriginalInstructions] = useState<InstructionValues | null>(null);
+  const formRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
   const [quotaExhausted, setQuotaExhausted] = useState(false);
@@ -229,133 +225,14 @@ export function CreateQuotation({
     }
   };
 
-  const startEditing = () => {
-    if (!understanding) return;
-    setDraftUnderstanding({
-      ...understanding,
-      blocks: understanding.blocks.map((block) => ({ ...block, items: [...block.items] })),
-    });
-  };
-
-  const currentInstructionValues = (): InstructionValues => ({
-    kind: generatedFromJob ? 'job' : 'paste',
-    text,
-    jobDescription,
-    quotationGoal,
-    cleaningType,
-    targetTotalNgn,
-  });
-
-  const rememberOriginal = (values: InstructionValues) => {
-    setOriginalInstructions((current) => current ?? values);
-  };
-
-  const openInstructions = () => {
-    if (!pdfUrl) return;
-    setInstructionsError('');
-    rememberOriginal(currentInstructionValues());
-    setInstructionsOpen(true);
-  };
-
-  const regenerateFromInstructions = async (values: InstructionValues) => {
-    setBusy('generate');
-    setInstructionsError('');
+  const editAndRegenerate = () => {
     setError('');
-    try {
-      let nextUnderstanding: Understanding;
-      let rawInput: string;
-      let nextMissing: string[] = [];
-      let nextEngine: { usedAi: boolean; model: string } | null = null;
-      let nextJobTotals: { total: number; target: number } | null = null;
-
-      if (values.kind === 'job') {
-        const targetTotal = Number(values.targetTotalNgn);
-        if (!Number.isSafeInteger(targetTotal) || targetTotal <= 0) {
-          throw new Error('Enter a valid proposal total in Naira.');
-        }
-        setBusy('draft');
-        const draft = await api.draftJobQuotation({
-          cleaning_type: values.cleaningType,
-          job_description: values.jobDescription.trim(),
-          quotation_goal: values.quotationGoal.trim(),
-          target_total_ngn: targetTotal,
-          profile,
-          client,
-        });
-        if (
-          draft.target_total_ngn !== targetTotal
-          || draft.suggested_total_ngn !== targetTotal
-          || draft.understanding.financials.grand_total !== targetTotal
-          || !draft.understanding.financials.consistent
-        ) {
-          throw new Error(
-            'The draft did not preserve your exact proposal total. Nothing was changed; the previous document is unchanged.',
-          );
-        }
-        nextUnderstanding = draft.understanding;
-        rawInput = draft.quotation_text;
-        nextMissing = draft.missing_info;
-        nextEngine = { usedAi: true, model: draft.model };
-        nextJobTotals = { total: draft.suggested_total_ngn, target: draft.target_total_ngn };
-      } else {
-        const response = await api.understand(values.text, 'paste', profile, client);
-        nextUnderstanding = response.understanding;
-        rawInput = values.text;
-        nextEngine = { usedAi: response.used_ai, model: response.model };
-      }
-
-      setBusy('generate');
-      const response = await api.generate(
-        buildPayload(
-          nextUnderstanding, profile, client, rawInput, documentId,
-          values.kind, nextMissing,
-          values.kind === 'job' ? values.jobDescription.trim() : '',
-          values.kind === 'job' ? values.cleaningType : null,
-          values.kind === 'job' ? values.quotationGoal.trim() : '',
-        ),
-      );
-
-      setUnderstanding(nextUnderstanding);
-      setDocumentId(response.document_id);
-      setPdfUrl(response.pdf_url);
-      setPages(response.preview_urls);
-
-      if (values.kind === 'job') {
-        setText(rawInput);
-        setInputMode('job');
-        setGeneratedFromJob(true);
-        setJobDescription(values.jobDescription);
-        setQuotationGoal(values.quotationGoal);
-        setCleaningType(values.cleaningType);
-        setTargetTotalNgn(values.targetTotalNgn);
-        setJobMissingInfo(nextMissing);
-        if (nextJobTotals) setJobTotals(nextJobTotals);
-        setJobEstimateNotice(
-          'The proposal total is fixed at the amount entered when this draft was created.',
-        );
-      } else {
-        setText(values.text);
-      }
-      if (nextEngine) setEngine(nextEngine);
-
-      rememberOriginal(values);
-      setInstructionsOpen(false);
-      onSaved();
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 402) {
-        setQuotaExhausted(true);
-        if (typeof e.detail === 'object' && e.detail?.monthly_price_ngn) {
-          setMonthlyPrice(e.detail.monthly_price_ngn);
-        }
-        setInstructionsOpen(false);
-      } else {
-        setInstructionsError(
-          e instanceof Error ? e.message : 'Unable to regenerate the document.',
-        );
-      }
-    } finally {
-      setBusy(null);
-    }
+    setInputMode('paste');
+    setGeneratedFromJob(false);
+    setDraftUnderstanding(null);
+    window.requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   };
 
   const updateDraftBlocks = (blocks: SemanticBlock[]) => {
@@ -412,7 +289,7 @@ export function CreateQuotation({
   return (
     <>
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-      <div className="space-y-4 min-w-0">
+      <div ref={formRef} className="space-y-4 min-w-0">
         <div className="card p-4 sm:p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -681,14 +558,8 @@ export function CreateQuotation({
           <div className="flex items-center gap-2">
             {pdfUrl && (
               <>
-              {understanding && (
-                <button type="button" className="btn"
-                  onClick={startEditing} disabled={Boolean(busy)}>
-                  <Pencil size={15} /> Edit proposal content
-                </button>
-              )}
               <button type="button" className="btn"
-                onClick={openInstructions}>
+                onClick={editAndRegenerate} disabled={Boolean(busy)}>
                 <Pencil size={15} /> Edit &amp; Regenerate
               </button>
               <button type="button" className="btn ml-auto"
@@ -707,15 +578,6 @@ export function CreateQuotation({
         </div>
       </div>
     </div>
-    {instructionsOpen && (
-      <EditInstructions
-        original={originalInstructions ?? currentInstructionValues()}
-        busy={Boolean(busy)}
-        error={instructionsError}
-        onCancel={() => { if (!busy) setInstructionsOpen(false); }}
-        onRegenerate={(values) => { void regenerateFromInstructions(values); }}
-      />
-    )}
     </>
   );
 }

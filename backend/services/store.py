@@ -27,6 +27,11 @@ REFERENCES = STORAGE / "references"
 PROFILE_FILE = STORAGE / "profile.json"
 SETTINGS_FILE = STORAGE / "settings.json"
 
+# Generated proposals are retained for this many days and then purged
+# automatically (on the next document listing) so storage does not grow without
+# bound. Override with the DOCUMENT_RETENTION_DAYS environment variable.
+RETENTION_DAYS = int(os.environ.get("DOCUMENT_RETENTION_DAYS", "3"))
+
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -110,8 +115,39 @@ def get_document(document_id: str) -> DocumentRecord | None:
         return None
 
 
+def _record_age_days(record: DocumentRecord) -> float | None:
+    stamp = record.created_at or record.updated_at
+    if not stamp:
+        return None
+    try:
+        created = time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+    return (time.time() - created) / 86400.0
+
+
+def purge_expired_documents(max_age_days: int = RETENTION_DAYS) -> int:
+    """Delete proposals older than ``max_age_days``. Returns the count removed."""
+    _ensure_dirs()
+    removed = 0
+    for path in list(DOCUMENTS.glob("*.json")):
+        payload = _read_json(path)
+        if payload is None:
+            continue
+        try:
+            record = DocumentRecord.model_validate(payload)
+        except Exception:
+            continue
+        age = _record_age_days(record)
+        if age is not None and age >= max_age_days:
+            if delete_document(record.id):
+                removed += 1
+    return removed
+
+
 def list_documents() -> list[DocumentRecord]:
     _ensure_dirs()
+    purge_expired_documents()
     records: list[DocumentRecord] = []
     for path in DOCUMENTS.glob("*.json"):
         payload = _read_json(path)
@@ -358,6 +394,7 @@ _SUPABASE_FUNCTIONS = (
     "save_record",
     "get_document",
     "list_documents",
+    "purge_expired_documents",
     "delete_document",
     "save_pdf",
     "save_previews",
