@@ -321,6 +321,18 @@ def billing_status():
 def billing_checkout(req: CheckoutRequest):
     frontend_url = (os.environ.get("FRONTEND_URL") or "").strip()
     if not frontend_url:
+        # Fall back to the configured CORS origin so a missing FRONTEND_URL does
+        # not break checkout when the frontend origin is already trusted.
+        origins = [
+            origin.strip()
+            for origin in (os.environ.get("CORS_ORIGINS") or "").split(",")
+            if origin.strip()
+        ]
+        frontend_url = next(
+            (origin for origin in origins if origin.startswith("http") and "*" not in origin),
+            "",
+        )
+    if not frontend_url:
         raise HTTPException(status_code=503, detail="FRONTEND_URL is not configured.")
     checkout_url = billing.create_checkout(req.email, req.name, frontend_url)
     return {"checkout_url": checkout_url}
