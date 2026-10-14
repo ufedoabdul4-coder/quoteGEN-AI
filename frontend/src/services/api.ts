@@ -38,24 +38,40 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
   return response;
 }
 
+/** FastAPI reports a rejected request body as one entry per offending field. */
+type ValidationIssue = { loc?: (string | number)[]; msg?: string };
+
+const validationMessage = (issues: ValidationIssue[]): string => issues
+  .map((issue) => {
+    const field = (issue.loc ?? [])
+      .filter((part) => typeof part === 'string' && part !== 'body')
+      .join('.');
+    const reason = issue.msg || 'is not valid';
+    return field ? `${field}: ${reason}` : reason;
+  })
+  .join('; ') || 'The request was rejected as invalid.';
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await apiFetch(path, init);
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
     const message = (detail as {
-      detail?: string | {
+      detail?: string | ValidationIssue[] | {
         code?: string;
         message?: string;
         monthly_price_ngn?: number;
         monthly_plan_auto_renew?: boolean;
       };
     }).detail;
+    // A validation list has no single message, so flatten it to the field
+    // names that were refused rather than reporting a bare status code.
+    const flattened = Array.isArray(message) ? validationMessage(message) : message;
     throw new ApiError(
-      typeof message === 'string'
-        ? message
-        : message?.message || `Request failed (${response.status})`,
+      typeof flattened === 'string'
+        ? flattened
+        : flattened?.message || `Request failed (${response.status})`,
       response.status,
-      message,
+      flattened,
     );
   }
   return response.json() as Promise<T>;

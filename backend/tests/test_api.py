@@ -247,6 +247,37 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_job_draft_accepts_unfilled_profile_and_client(self):
+        # The browser sends an untouched profile field as null, which must read
+        # as blank instead of failing the request.
+        with (
+            mock.patch.object(
+                main.job_draft, "active_master_reference",
+                return_value="Master proposal reference",
+            ),
+            mock.patch.object(
+                main.job_draft,
+                "draft_quotation",
+                new=mock.AsyncMock(side_effect=main.job_draft.JobDraftError(
+                    "stopped after validation", status_code=503,
+                )),
+            ),
+        ):
+            response = self.client.post("/job-draft", json={
+                "job_description": "Three bedrooms and a kitchen",
+                "quotation_goal": "A complete deep cleaning quotation",
+                "target_total_ngn": 850000,
+                "profile": {
+                    "name": None, "business_type": None, "phone": None,
+                    "email": None, "website": None, "address": None,
+                    "logo_data_url": None,
+                },
+                "client": {"name": None, "email": None, "phone": None, "address": None},
+            })
+
+        self.assertNotEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 503)
+
     def test_job_draft_requires_active_master_proposal(self):
         with mock.patch.object(
             main.job_draft, "active_master_reference",

@@ -39,7 +39,7 @@ export interface BusinessProfile {
   email: string;
   website: string;
   address: string;
-  logo_data_url: string | null;
+  logo_data_url: string;
 }
 
 export interface ClientInfo {

@@ -18,7 +18,7 @@ import { PaymentReturnPage } from './components/PaymentReturnPage';
 import { useAuth } from './services/auth';
 
 const EMPTY_PROFILE: BusinessProfile = {
-  name: '', business_type: '', phone: '', email: '', website: '', address: '', logo_data_url: null,
+  name: '', business_type: '', phone: '', email: '', website: '', address: '', logo_data_url: '',
 };
 
 const MOBILE_NAV: { id: Route; label: string; icon: typeof LayoutDashboard }[] = [

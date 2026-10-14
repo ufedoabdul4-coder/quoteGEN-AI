@@ -235,7 +235,22 @@ class ActiveTemplateRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ClientInfo(BaseModel):
+class _BrowserText(BaseModel):
+    """Base for the text-only models the browser fills in.
+
+    Every field below is an optional string whose absence already means
+    "blank", and an untouched field arrives from the frontend as ``null``
+    rather than as ``""``. Reading that null as blank keeps an unfilled
+    profile or client from failing the whole request with a 422.
+    """
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def blank_when_null(cls, value: Any) -> Any:
+        return "" if value is None else value
+
+
+class ClientInfo(_BrowserText):
     name: str = ""
     address: str = ""
     phone: str = ""
@@ -243,7 +258,7 @@ class ClientInfo(BaseModel):
     contact_person: str = ""
 
 
-class BusinessProfile(BaseModel):
+class BusinessProfile(_BrowserText):
     name: str = ""
     business_type: str = ""
     tagline: str = ""
