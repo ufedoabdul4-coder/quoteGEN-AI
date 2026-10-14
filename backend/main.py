@@ -264,6 +264,7 @@ def generate(req: GenerateRequest):
                         "and up to 3 free quotations per UTC day. Choose the monthly plan to continue."
                     ),
                     "monthly_price_ngn": billing.monthly_price_ngn(),
+                    "monthly_plan_auto_renew": billing.auto_renew_enabled(),
                 },
             )
 
@@ -311,6 +312,7 @@ def billing_status():
             "free_quota_window_days": billing.FREE_QUOTA_WINDOW_DAYS,
             "paid_until": None,
             "monthly_plan_active": False,
+            "monthly_plan_auto_renew": False,
             "monthly_price_ngn": billing.monthly_price_ngn(),
             "billing_enabled": False,
         }

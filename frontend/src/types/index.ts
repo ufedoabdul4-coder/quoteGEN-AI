@@ -155,6 +155,7 @@ export interface BillingStatus {
   free_quota_window_days: number;
   paid_until: string | null;
   monthly_plan_active: boolean;
+  monthly_plan_auto_renew?: boolean;
   monthly_price_ngn: number;
   billing_enabled: boolean;
 }

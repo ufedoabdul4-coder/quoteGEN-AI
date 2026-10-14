@@ -66,8 +66,10 @@ New accounts can generate up to 10 new quotations free in any rolling 30-day
 period, capped at 3 free quotations per UTC day. A quotation is counted only
 after successful generation; regenerating an existing saved quotation does not
 use another free quotation. After the free quota is used, one payment of
-₦13,310 unlocks unlimited quotations for one calendar month. The payment does
-not auto-renew. The price is configured with
+₦13,310 unlocks unlimited quotations for one calendar month. By default the
+payment does not auto-renew; set `FLUTTERWAVE_PAYMENT_PLAN_ID` (see the
+deployment section) to make it a recurring monthly subscription that
+Flutterwave renews automatically. The price is configured with
 `FLUTTERWAVE_MONTHLY_PRICE_NGN` so it can be adjusted when needed.
 
 Run the updated `backend/supabase/schema.sql` in the Supabase SQL Editor. It
@@ -117,7 +119,21 @@ In Render, set these backend environment variables:
   Flutterwave's webhook settings.
 - `FLUTTERWAVE_MONTHLY_PRICE_NGN`: `13310` (change this value when the plan
   price changes).
+- `FLUTTERWAVE_PAYMENT_PLAN_ID` (optional): the numeric ID of a monthly
+  Flutterwave payment plan. When set, checkout becomes a recurring
+  subscription — Flutterwave charges the card automatically each month on the
+  day the customer subscribed and emails a reminder before every charge.
+  Create the plan once in the Flutterwave dashboard (Payment Plans) with
+  `interval = monthly`, your price, and currency `NGN`, then paste its ID here.
+  Leaving it blank keeps the one-time, non-renewing checkout. Recurring plans
+  are card-only.
 - `FRONTEND_URL`: `https://quotegen1-ai.netlify.app`.
+
+Recurring charges are matched to the account by the subscriber's email
+address, so the monthly plan requires the `billing_accounts.email` column and
+the `renew_monthly_plan` function from `backend/supabase/schema.sql`. Run the
+latest schema before enabling `FLUTTERWAVE_PAYMENT_PLAN_ID`. Cancelling a
+subscription simply stops future renewals; access continues until `paid_until`.
 
 In Flutterwave's dashboard, configure the webhook URL as
 `https://YOUR-RENDER-SERVICE.onrender.com/billing/flutterwave/webhook`, choose

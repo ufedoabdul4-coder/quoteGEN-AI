@@ -32,6 +32,25 @@ def monthly_price_ngn() -> int:
     return price
 
 
+def _payment_plan_id() -> int | None:
+    """Flutterwave payment plan ID. When set, checkout becomes a card-only
+    monthly subscription that Flutterwave charges automatically."""
+    raw = (os.environ.get("FLUTTERWAVE_PAYMENT_PLAN_ID") or "").strip()
+    if not raw:
+        return None
+    try:
+        plan_id = int(raw)
+    except ValueError as error:
+        raise RuntimeError("FLUTTERWAVE_PAYMENT_PLAN_ID must be a whole number.") from error
+    if plan_id <= 0:
+        raise RuntimeError("FLUTTERWAVE_PAYMENT_PLAN_ID must be greater than zero.")
+    return plan_id
+
+
+def auto_renew_enabled() -> bool:
+    return _payment_plan_id() is not None
+
+
 def _client():
     client = supabase_client.get_client()
     if client is None:
@@ -78,6 +97,7 @@ def get_status() -> dict[str, Any]:
         "free_quota_window_days": FREE_QUOTA_WINDOW_DAYS,
         "paid_until": paid_until,
         "monthly_plan_active": active,
+        "monthly_plan_auto_renew": auto_renew_enabled(),
         "monthly_price_ngn": monthly_price_ngn(),
         "billing_enabled": True,
     }
@@ -108,6 +128,7 @@ def create_checkout(email: str, name: str, frontend_url: str) -> str:
     user_id = require_current_user()
     secret = _secret_key()
     price = monthly_price_ngn()
+    plan_id = _payment_plan_id()
     tx_ref = f"qg-{uuid.uuid4().hex}"
     client = _client()
     client.table(BILLING_PAYMENTS).insert({
@@ -117,21 +138,31 @@ def create_checkout(email: str, name: str, frontend_url: str) -> str:
         "status": "pending",
     }).execute()
 
+    payload: dict[str, Any] = {
+        "tx_ref": tx_ref,
+        "amount": str(price),
+        "currency": "NGN",
+        "redirect_url": f"{frontend_url.rstrip('/')}/?payment=complete",
+        "customer": {"email": email, "name": name or email},
+        "customizations": {
+            "title": "quoteGEN AI",
+            "description": (
+                "Monthly unlimited quotations - renews automatically"
+                if plan_id is not None
+                else "One month of unlimited quotations"
+            ),
+        },
+    }
+    if plan_id is not None:
+        # Subscribing to a payment plan makes the charge recurring (monthly)
+        # and locks the checkout to card payments.
+        payload["payment_plan"] = plan_id
+
     try:
         response = httpx.post(
             f"{FLUTTERWAVE_API}/payments",
             headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
-            json={
-                "tx_ref": tx_ref,
-                "amount": str(price),
-                "currency": "NGN",
-                "redirect_url": f"{frontend_url.rstrip('/')}/?payment=complete",
-                "customer": {"email": email, "name": name or email},
-                "customizations": {
-                    "title": "quoteGEN AI",
-                    "description": "One month of unlimited quotations",
-                },
-            },
+            json=payload,
             timeout=20,
         )
         response.raise_for_status()
@@ -161,6 +192,43 @@ def _payment_for_reference(tx_ref: str) -> dict[str, Any]:
     return rows[0]
 
 
+def _is_known_payment(tx_ref: str) -> bool:
+    result = (
+        _client().table(BILLING_PAYMENTS)
+        .select("tx_ref")
+        .eq("tx_ref", tx_ref)
+        .limit(1)
+        .execute()
+    )
+    return bool(result.data)
+
+
+def _verify_transaction(transaction_id: str) -> dict[str, Any]:
+    try:
+        response = httpx.get(
+            f"{FLUTTERWAVE_API}/transactions/{transaction_id}/verify",
+            headers={"Authorization": f"Bearer {_secret_key()}"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, ValueError) as error:
+        raise HTTPException(status_code=502, detail="Could not verify the Flutterwave payment.") from error
+
+
+def _record_subscription_email(user_id: str, email: str) -> None:
+    """Best-effort: remember the subscriber email so Flutterwave renewals,
+    which are tied to the customer email, can be matched to the account."""
+    if not email:
+        return
+    try:
+        _client().table(BILLING_ACCOUNTS).update({"email": email}).eq(
+            "user_id", user_id
+        ).execute()
+    except Exception:  # noqa: BLE001 - email tracking must never block activation
+        pass
+
+
 def verify_and_activate(transaction_id: str, tx_ref: str, *, expected_user: str | None = None) -> bool:
     if not transaction_id.isdigit():
         raise HTTPException(status_code=400, detail="Invalid Flutterwave transaction ID.")
@@ -174,17 +242,7 @@ def verify_and_activate(transaction_id: str, tx_ref: str, *, expected_user: str 
     if payment["status"] != "pending":
         raise HTTPException(status_code=400, detail="This payment is not pending.")
 
-    try:
-        response = httpx.get(
-            f"{FLUTTERWAVE_API}/transactions/{transaction_id}/verify",
-            headers={"Authorization": f"Bearer {_secret_key()}"},
-            timeout=20,
-        )
-        response.raise_for_status()
-        body = response.json()
-    except (httpx.HTTPError, ValueError) as error:
-        raise HTTPException(status_code=502, detail="Could not verify the Flutterwave payment.") from error
-
+    body = _verify_transaction(transaction_id)
     transaction = body.get("data") or {}
     try:
         amount = Decimal(str(transaction.get("amount", "0")))
@@ -207,19 +265,66 @@ def verify_and_activate(transaction_id: str, tx_ref: str, *, expected_user: str 
     ).execute()
     if not result.data:
         raise HTTPException(status_code=409, detail="Payment could not be applied to this account.")
+
+    if _payment_plan_id() is not None:
+        _record_subscription_email(
+            payment["user_id"],
+            ((transaction.get("customer") or {}).get("email") or "").strip(),
+        )
     return True
+
+
+def renew_subscription(email: str, transaction_id: str) -> bool:
+    """Apply a Flutterwave-initiated renewal charge to the matching account.
+
+    Recurring charges are not tied to the original tx_ref, so they are matched
+    by the subscriber's email address."""
+    if _payment_plan_id() is None:
+        return False
+    email = (email or "").strip()
+    if not email or not transaction_id.isdigit():
+        return False
+
+    body = _verify_transaction(transaction_id)
+    transaction = body.get("data") or {}
+    customer_email = ((transaction.get("customer") or {}).get("email") or "").strip()
+    try:
+        amount = Decimal(str(transaction.get("amount", "0")))
+        expected_amount = Decimal(str(monthly_price_ngn()))
+    except InvalidOperation:
+        return False
+
+    if (
+        body.get("status") != "success"
+        or transaction.get("status") != "successful"
+        or transaction.get("currency") != "NGN"
+        or amount < expected_amount
+        or customer_email.lower() != email.lower()
+    ):
+        return False
+
+    result = _client().rpc(
+        "renew_monthly_plan",
+        {"p_email": customer_email, "p_transaction_id": transaction_id, "p_amount": int(amount)},
+    ).execute()
+    return bool(result.data)
 
 
 def process_webhook(payload: dict[str, Any]) -> None:
     event = payload.get("event")
     data = payload.get("data") or {}
-    tx_ref = data.get("tx_ref")
-    transaction_id = data.get("id")
-    if (
-        event != "charge.completed"
-        or data.get("status") != "successful"
-        or not tx_ref
-        or transaction_id is None
-    ):
+    if event != "charge.completed" or data.get("status") != "successful":
+        # Cancellations only stop future renewals; access already runs until
+        # paid_until, so there is nothing to revoke here.
         return
-    verify_and_activate(str(transaction_id), str(tx_ref))
+    transaction_id = data.get("id")
+    if transaction_id is None:
+        return
+    transaction_id = str(transaction_id)
+    tx_ref = data.get("tx_ref")
+    if tx_ref and _is_known_payment(str(tx_ref)):
+        verify_and_activate(transaction_id, str(tx_ref))
+        return
+    email = ((data.get("customer") or {}).get("email") or "").strip()
+    if email:
+        renew_subscription(email, transaction_id)

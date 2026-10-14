@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  LayoutDashboard, FileText, CirclePlus, Building, FileStack, Menu, X,
+  LayoutDashboard, FileText, CirclePlus, Building, FileStack, Menu, X, Sparkles,
 } from 'lucide-react';
 import type {
   BillingStatus, BusinessProfile, DocumentRecord, DocumentSummary, TemplateMeta,
@@ -204,6 +204,7 @@ export default function App() {
         onContinue={() => {
           window.history.replaceState(null, '', '/');
           setPaymentReturn(false);
+          void loadBillingStatus();
         }}
       />
     );
@@ -289,7 +290,9 @@ export default function App() {
       <Sidebar active={route} onNavigate={setRoute} online={online}
         documentCount={documents.length}
         templateCount={templatesLoaded ? templates.length : null}
-        email={email} onSignOut={() => { void handleSignOut(); }} />
+        email={email}
+        unlimited={billingStatus?.monthly_plan_active ?? false}
+        onSignOut={() => { void handleSignOut(); }} />
 
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="md:hidden sticky top-0 z-20 bg-[var(--surface)] border-b border-[var(--border)]">
@@ -297,6 +300,9 @@ export default function App() {
             <div className="flex items-center gap-2">
               <span className="font-semibold">quoteGEN</span>
               <span className="chip chip-gold">AI</span>
+              {billingStatus?.monthly_plan_active && (
+                <span className="chip chip-gold"><Sparkles size={12} /> Unlimited</span>
+              )}
             </div>
             <button
               type="button"

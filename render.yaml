@@ -30,6 +30,8 @@ services:
         value: https://quotegen1-ai.netlify.app
       - key: FLUTTERWAVE_MONTHLY_PRICE_NGN
         value: "13310"
+      - key: FLUTTERWAVE_PAYMENT_PLAN_ID
+        sync: false
       - key: FLUTTERWAVE_SECRET_KEY
         sync: false
       - key: FLUTTERWAVE_WEBHOOK_SECRET_HASH

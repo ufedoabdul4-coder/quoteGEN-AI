@@ -11,6 +11,7 @@ import {
 } from '../services/api';
 import { PreviewPane } from './PreviewPane';
 import { BlockEditor } from './BlockEditor';
+import { PlanBenefits } from './PlanBenefits';
 import { CLEANING_SERVICES, isCleaningServiceType } from '../utils/cleaning';
 import { useAuth } from '../services/auth';
 
@@ -117,6 +118,8 @@ export function CreateQuotation({
   const [error, setError] = useState('');
   const [quotaExhausted, setQuotaExhausted] = useState(false);
   const [monthlyPrice, setMonthlyPrice] = useState<number | null>(null);
+  const [monthlyAutoRenew, setMonthlyAutoRenew] = useState(false);
+  const [showPlanBenefits, setShowPlanBenefits] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [engine, setEngine] = useState<{ usedAi: boolean; model: string } | null>(null);
 
@@ -151,8 +154,9 @@ export function CreateQuotation({
     } catch (e) {
       if (e instanceof ApiError && e.status === 402) {
         setQuotaExhausted(true);
-        if (typeof e.detail === 'object' && e.detail?.monthly_price_ngn) {
-          setMonthlyPrice(e.detail.monthly_price_ngn);
+        if (typeof e.detail === 'object') {
+          if (e.detail?.monthly_price_ngn) setMonthlyPrice(e.detail.monthly_price_ngn);
+          setMonthlyAutoRenew(Boolean(e.detail?.monthly_plan_auto_renew));
         }
         setError('');
       } else {
@@ -213,8 +217,9 @@ export function CreateQuotation({
     } catch (e) {
       if (e instanceof ApiError && e.status === 402) {
         setQuotaExhausted(true);
-        if (typeof e.detail === 'object' && e.detail?.monthly_price_ngn) {
-          setMonthlyPrice(e.detail.monthly_price_ngn);
+        if (typeof e.detail === 'object') {
+          if (e.detail?.monthly_price_ngn) setMonthlyPrice(e.detail.monthly_price_ngn);
+          setMonthlyAutoRenew(Boolean(e.detail?.monthly_plan_auto_renew));
         }
         setError('');
       } else {
@@ -350,25 +355,32 @@ export function CreateQuotation({
                 <h2 className="font-semibold">You’ve reached your free generation limit</h2>
                 <p className="text-sm text-[var(--text-muted)] mt-1">
                   The free plan allows 10 proposals in any rolling 30 days, with up to 3 per UTC day.
-                  Get unlimited proposals for one month for{' '}
-                  {monthlyPrice === null ? '₦13,310' : `₦${monthlyPrice.toLocaleString('en-NG')}`}.
-                  This is a one-time monthly payment; it does not auto-renew.
+                  Get unlimited proposals for{' '}
+                  {monthlyPrice === null ? '₦13,310' : `₦${monthlyPrice.toLocaleString('en-NG')}`}
+                  /month{monthlyAutoRenew ? ', renewed automatically until you cancel' : ''}.
                 </p>
               </div>
               <button
                 type="button"
                 className="btn btn-primary"
-                onClick={() => { void startMonthlyCheckout(); }}
+                onClick={() => setShowPlanBenefits(true)}
                 disabled={checkoutBusy}
               >
-                {checkoutBusy
-                  ? <LoaderCircle size={15} className="spin" />
-                  : <Sparkles size={15} />}
-                Continue to Flutterwave
+                <Sparkles size={15} /> See the Unlimited plan
               </button>
               {error && <p role="alert" className="text-xs text-[var(--error)]">{error}</p>}
             </div>
           )}
+
+          <PlanBenefits
+            open={showPlanBenefits}
+            price={monthlyPrice ?? 13310}
+            autoRenew={monthlyAutoRenew}
+            busy={checkoutBusy}
+            error={error}
+            onClose={() => setShowPlanBenefits(false)}
+            onConfirm={() => { void startMonthlyCheckout(); }}
+          />
 
           {draftUnderstanding ? (
             <div className="space-y-3">

@@ -49,6 +49,11 @@ create table if not exists public.billing_accounts (
     updated_at timestamptz not null default now()
 );
 
+-- Subscriber email, used to match Flutterwave recurring charges (which are
+-- tied to the customer email) back to the account on each renewal.
+alter table public.billing_accounts
+    add column if not exists email text;
+
 create table if not exists public.quotation_usage (
     user_id uuid not null references auth.users (id) on delete cascade,
     document_id text not null,
@@ -133,6 +138,8 @@ create index if not exists billing_payments_user_created_idx
     on public.billing_payments (user_id, created_at desc);
 create index if not exists billing_accounts_paid_until_idx
     on public.billing_accounts (paid_until);
+create index if not exists billing_accounts_email_idx
+    on public.billing_accounts (lower(email));
 
 create or replace function public.consume_quotation(p_user_id uuid, p_document_id text)
 returns boolean
@@ -234,10 +241,56 @@ begin
 end;
 $$;
 
+create or replace function public.renew_monthly_plan(
+    p_email text,
+    p_transaction_id text,
+    p_amount integer
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    v_user uuid;
+begin
+    select user_id into v_user
+    from public.billing_accounts
+    where lower(email) = lower(p_email)
+    limit 1;
+
+    if v_user is null then
+        return false;
+    end if;
+
+    -- Record the renewal; a repeated transaction_id is ignored so a retried
+    -- webhook never extends the plan twice.
+    insert into public.billing_payments (tx_ref, user_id, amount_ngn, status, transaction_id)
+    values ('renewal-' || p_transaction_id, v_user, greatest(p_amount, 1), 'successful', p_transaction_id)
+    on conflict (tx_ref) do nothing;
+
+    if not found then
+        return true;
+    end if;
+
+    update public.billing_accounts
+    set paid_until = greatest(
+            coalesce(public.billing_accounts.paid_until, now()),
+            now()
+        ) + interval '1 month',
+        updated_at = now()
+    where user_id = v_user;
+
+    return true;
+end;
+$$;
+
 revoke all on function public.consume_quotation(uuid, text) from public, anon, authenticated;
 grant execute on function public.consume_quotation(uuid, text) to service_role;
 revoke all on function public.activate_monthly_plan(text, text) from public, anon, authenticated;
 grant execute on function public.activate_monthly_plan(text, text) to service_role;
+revoke all on function public.renew_monthly_plan(text, text, integer) from public, anon, authenticated;
+grant execute on function public.renew_monthly_plan(text, text, integer) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- storage buckets (private)

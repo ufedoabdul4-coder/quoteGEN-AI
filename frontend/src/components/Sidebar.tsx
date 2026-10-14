@@ -6,6 +6,7 @@ import {
   Building,
   CircleCheck,
   CircleAlert,
+  Sparkles,
 } from 'lucide-react';
 
 export type Route = 'overview' | 'documents' | 'create' | 'templates' | 'profile';
@@ -27,11 +28,12 @@ interface Props {
   documentCount: number;
   templateCount: number | null;
   email: string | null;
+  unlimited: boolean;
   onSignOut: () => void;
 }
 
 export function Sidebar({
-  active, onNavigate, online, documentCount, templateCount, email, onSignOut,
+  active, onNavigate, online, documentCount, templateCount, email, unlimited, onSignOut,
 }: Props) {
   return (
     <aside className="hidden md:flex md:flex-col w-64 shrink-0 h-screen sticky top-0 border-r border-[var(--border)] bg-[var(--surface)]">
@@ -40,7 +42,13 @@ export function Sidebar({
           <span className="text-lg font-semibold tracking-tight">quoteGEN</span>
           <span className="chip chip-gold">AI</span>
         </div>
-        <p className="text-xs text-[var(--text-dim)] mt-1">Premium proposal studio</p>
+        {unlimited ? (
+          <div className="mt-2">
+            <span className="chip chip-gold"><Sparkles size={12} /> Unlimited</span>
+          </div>
+        ) : (
+          <p className="text-xs text-[var(--text-dim)] mt-1">Premium proposal studio</p>
+        )}
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">

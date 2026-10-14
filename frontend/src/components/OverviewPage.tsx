@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FileText, FileStack, Sparkles, Download, ArrowRight, LoaderCircle, Zap } from 'lucide-react';
 import type { BillingStatus, DocumentSummary } from '../types';
 import { openAuthenticatedAsset } from '../services/api';
+import { PlanBenefits } from './PlanBenefits';
 
 interface Props {
   documents: DocumentSummary[];
@@ -111,6 +112,9 @@ function UsageCard({
   upgradeBusy: boolean;
   upgradeError: string;
 }) {
+  const [showBenefits, setShowBenefits] = useState(false);
+  const autoRenew = status?.monthly_plan_auto_renew ?? false;
+
   if (!status) {
     return (
       <section className="card flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-[var(--text-muted)]" aria-label="PDF generation usage">
@@ -121,16 +125,22 @@ function UsageCard({
   }
   return (
     <section className="card p-4 space-y-3" aria-label="PDF generation usage">
-      <div>
-        <h2 className="text-sm font-semibold">PDF generation usage</h2>
-        <p className="mt-1 text-xs text-[var(--text-muted)]">
-          {status.pdfs_generated_today} PDF{status.pdfs_generated_today === 1 ? '' : 's'} generated today
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold">PDF generation usage</h2>
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
+            {status.pdfs_generated_today} PDF{status.pdfs_generated_today === 1 ? '' : 's'} generated today
+          </p>
+        </div>
+        {status.monthly_plan_active && (
+          <span className="chip chip-gold"><Sparkles size={12} /> Unlimited</span>
+        )}
       </div>
       {status.monthly_plan_active ? (
         <p className="text-sm text-[var(--ok)]">
           Unlimited generations active until{' '}
-          {status.paid_until ? new Date(status.paid_until).toLocaleDateString() : 'the end of your plan'}.
+          {status.paid_until ? new Date(status.paid_until).toLocaleDateString() : 'the end of your plan'}
+          {autoRenew ? ' — renews monthly.' : '.'}
         </p>
       ) : (
         <div className="space-y-3">
@@ -146,22 +156,32 @@ function UsageCard({
             <button
               type="button"
               className="btn btn-primary"
-              onClick={onUpgrade}
+              onClick={() => setShowBenefits(true)}
               disabled={upgradeBusy}
             >
               {upgradeBusy ? <LoaderCircle size={15} className="spin" /> : <Zap size={15} />}
               {upgradeBusy ? 'Opening checkout…' : 'Want unlimited? Click here'}
             </button>
             <span className="text-xs text-[var(--text-muted)]">
-              Unlimited proposals for one month for{' '}
-              ₦{status.monthly_price_ngn.toLocaleString('en-NG')}. One-time payment, no auto-renew.
+              ₦{status.monthly_price_ngn.toLocaleString('en-NG')}/month
+              {autoRenew ? ' · renews monthly' : ' · one-time, no auto-renew'}.
             </span>
           </div>
-          {upgradeError && (
+          {upgradeError && !showBenefits && (
             <p role="alert" className="text-xs text-[var(--error)]">{upgradeError}</p>
           )}
         </div>
       )}
+
+      <PlanBenefits
+        open={showBenefits}
+        price={status.monthly_price_ngn}
+        autoRenew={autoRenew}
+        busy={upgradeBusy}
+        error={upgradeError}
+        onClose={() => setShowBenefits(false)}
+        onConfirm={onUpgrade}
+      />
     </section>
   );
 }

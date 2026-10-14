@@ -47,6 +47,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         code?: string;
         message?: string;
         monthly_price_ngn?: number;
+        monthly_plan_auto_renew?: boolean;
       };
     }).detail;
     throw new ApiError(
@@ -68,6 +69,7 @@ export class ApiError extends Error {
       code?: string;
       message?: string;
       monthly_price_ngn?: number;
+      monthly_plan_auto_renew?: boolean;
     },
   ) {
     super(message);
