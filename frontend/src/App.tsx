@@ -15,11 +15,63 @@ import { ProfilePage } from './components/ProfilePage';
 import { MasterTemplatePage } from './components/MasterTemplatePage';
 import { LoginPage } from './components/LoginPage';
 import { PaymentReturnPage } from './components/PaymentReturnPage';
+import { LandingPage, type GatedIntent } from './components/LandingPage';
+import { OnboardingTour } from './components/OnboardingTour';
+import { InstallPrompt } from './components/InstallPrompt';
 import { useAuth } from './services/auth';
 
 const EMPTY_PROFILE: BusinessProfile = {
   name: '', business_type: '', phone: '', email: '', website: '', address: '', logo_data_url: '',
 };
+
+// A visitor's chosen feature is remembered so they land on it once signed in,
+// even after the email-confirmation round-trip.
+const PENDING_INTENT_KEY = 'quotegen:pending-intent';
+const INTENT_ROUTES: Route[] = ['overview', 'documents', 'create', 'templates', 'profile'];
+
+function savePendingIntent(intent: GatedIntent) {
+  try {
+    window.localStorage.setItem(PENDING_INTENT_KEY, intent);
+  } catch {
+    /* storage may be unavailable */
+  }
+}
+
+function takePendingIntent(): GatedIntent | null {
+  try {
+    const value = window.localStorage.getItem(PENDING_INTENT_KEY);
+    window.localStorage.removeItem(PENDING_INTENT_KEY);
+    if (value === 'upgrade') return 'upgrade';
+    return value && (INTENT_ROUTES as string[]).includes(value) ? (value as Route) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingIntent() {
+  try {
+    window.localStorage.removeItem(PENDING_INTENT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function hasOnboarded(userId: string): boolean {
+  try {
+    return window.localStorage.getItem(`quotegen:onboarded:${userId}`) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function markOnboarded(userId: string | undefined) {
+  if (!userId) return;
+  try {
+    window.localStorage.setItem(`quotegen:onboarded:${userId}`, '1');
+  } catch {
+    /* ignore */
+  }
+}
 
 const MOBILE_NAV: { id: Route; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -56,6 +108,8 @@ export default function App() {
   const [signOutError, setSignOutError] = useState('');
   const [upgradeBusy, setUpgradeBusy] = useState(false);
   const [upgradeError, setUpgradeError] = useState('');
+  const [authGate, setAuthGate] = useState<{ label: string; mode: 'signin' | 'signup' } | null>(null);
+  const [showTour, setShowTour] = useState(false);
 
   const handleSignOut = async () => {
     setSignOutError('');
@@ -141,7 +195,10 @@ export default function App() {
   useEffect(() => {
     if (!ready || (configured && online !== true) || online === null || (configured && !userId)) return;
 
-    setRoute('overview');
+    const pendingIntent = takePendingIntent();
+    setRoute(pendingIntent && pendingIntent !== 'upgrade' ? pendingIntent : 'overview');
+    setAuthGate(null);
+    setShowTour(!hasOnboarded(userId ?? 'local'));
     setProfile(EMPTY_PROFILE);
     setDocuments([]);
     setTemplates([]);
@@ -196,7 +253,29 @@ export default function App() {
   }
   if (configured && !session) {
     const initialEmail = new URLSearchParams(window.location.search).get('email') || '';
-    return <LoginPage initialEmail={initialEmail} />;
+    if (authGate || initialEmail) {
+      return (
+        <>
+          <LoginPage
+            initialEmail={initialEmail}
+            initialMode={authGate?.mode ?? 'signin'}
+            intentLabel={authGate?.label}
+            onBack={authGate ? () => { clearPendingIntent(); setAuthGate(null); } : undefined}
+          />
+          <InstallPrompt />
+        </>
+      );
+    }
+    return (
+      <>
+        <LandingPage
+          onSignIn={() => setAuthGate({ label: '', mode: 'signin' })}
+          onGetStarted={() => setAuthGate({ label: '', mode: 'signup' })}
+          onProtected={requestAuth}
+        />
+        <InstallPrompt />
+      </>
+    );
   }
   if (paymentReturn) {
     return (
@@ -284,6 +363,25 @@ export default function App() {
     setRoute(nextRoute);
     setMobileMenuOpen(false);
   };
+
+  function requestAuth(
+    intent: GatedIntent,
+    label: string,
+    mode: 'signin' | 'signup' = 'signup',
+  ) {
+    savePendingIntent(intent);
+    setAuthGate({ label, mode });
+  }
+
+  function closeTour() {
+    setShowTour(false);
+    markOnboarded(userId ?? 'local');
+  }
+
+  function finishTour(nextRoute: Route) {
+    closeTour();
+    setRoute(nextRoute);
+  }
 
   return (
     <div className="flex min-h-screen bg-[var(--bg)]">
@@ -426,6 +524,10 @@ export default function App() {
           )}
         </main>
       </div>
+
+      <OnboardingTour key={showTour ? 'tour-open' : 'tour-closed'}
+        open={showTour} onClose={closeTour} onFinish={finishTour} />
+      <InstallPrompt />
     </div>
   );
 }
