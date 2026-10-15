@@ -49,15 +49,7 @@ export interface ClientInfo {
   address: string;
 }
 
-export type CleaningServiceType =
-  | 'residential_deep_cleaning'
-  | 'regular_house_cleaning'
-  | 'post_construction_cleaning'
-  | 'office_cleaning'
-  | 'commercial_facility_cleaning'
-  | 'move_in_move_out_cleaning'
-  | 'upholstery_cleaning'
-  | 'fumigation_pest_control';
+export type ServiceType = string;
 
 export interface DesignTokens {
   primary: string;
@@ -111,7 +103,7 @@ export interface UnderstandResponse {
 }
 
 export interface JobDraftRequest {
-  cleaning_type: CleaningServiceType;
+  cleaning_type: ServiceType;
   job_description: string;
   quotation_goal: string;
   target_total_ngn: number;
@@ -184,7 +176,7 @@ export interface DocumentRecord {
   raw_input: string;
   job_description: string;
   quotation_goal: string;
-  cleaning_type: CleaningServiceType | null;
+  cleaning_type: ServiceType | null;
   job_missing_info: string[];
   client: ClientInfo;
   profile: BusinessProfile;
@@ -232,6 +224,6 @@ export interface GenerateRequest {
   input_kind?: 'paste' | 'job';
   job_description?: string;
   quotation_goal?: string;
-  cleaning_type?: CleaningServiceType | null;
+  cleaning_type?: ServiceType | null;
   job_missing_info?: string[];
 }

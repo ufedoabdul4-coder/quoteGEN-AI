@@ -277,18 +277,6 @@ class BusinessProfile(_BrowserText):
 # documents
 # ---------------------------------------------------------------------------
 
-CleaningServiceType = Literal[
-    "residential_deep_cleaning",
-    "regular_house_cleaning",
-    "post_construction_cleaning",
-    "office_cleaning",
-    "commercial_facility_cleaning",
-    "move_in_move_out_cleaning",
-    "upholstery_cleaning",
-    "fumigation_pest_control",
-]
-
-
 class DocumentRecord(BaseModel):
     id: str
     title: str = "Untitled quotation"
@@ -300,7 +288,7 @@ class DocumentRecord(BaseModel):
     raw_input: str = ""
     job_description: str = ""
     quotation_goal: str = ""
-    cleaning_type: Optional[CleaningServiceType] = None
+    cleaning_type: Optional[str] = None
     job_missing_info: List[str] = Field(default_factory=list)
     client: ClientInfo = Field(default_factory=ClientInfo)
     profile: BusinessProfile = Field(default_factory=BusinessProfile)
@@ -333,7 +321,7 @@ class UnderstandResponse(BaseModel):
 
 
 class JobDraftRequest(BaseModel):
-    cleaning_type: CleaningServiceType = "residential_deep_cleaning"
+    cleaning_type: str = ""
     job_description: str = Field(min_length=1, max_length=10000)
     quotation_goal: str = Field(min_length=1, max_length=2000)
     target_total_ngn: int = Field(gt=0, le=999999999999, strict=True)
@@ -371,7 +359,7 @@ class GenerateRequest(BaseModel):
     input_kind: Literal["paste", "job"] = "paste"
     job_description: str = Field(default="", max_length=10000)
     quotation_goal: str = Field(default="", max_length=2000)
-    cleaning_type: Optional[CleaningServiceType] = None
+    cleaning_type: Optional[str] = None
     job_missing_info: List[str] = Field(default_factory=list, max_length=20)
 
 

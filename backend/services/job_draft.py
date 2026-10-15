@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 _MAX_AUTOMATIC_RETRY_WAIT_SECONDS = 3.0
-_CLEANING_TYPE_LABELS = {
+# Pretty labels for the original cleaning categories; every other profession is
+# accepted as free text and humanised with _service_label().
+_SERVICE_TYPE_LABELS = {
     "residential_deep_cleaning": "Residential deep cleaning",
     "regular_house_cleaning": "Regular house cleaning",
     "post_construction_cleaning": "Post-construction cleaning",
@@ -32,6 +34,24 @@ _CLEANING_TYPE_LABELS = {
     "upholstery_cleaning": "Upholstery cleaning",
     "fumigation_pest_control": "Fumigation or pest control",
 }
+_DEFAULT_SERVICE_TYPE = "general_services"
+_DEFAULT_SERVICE_LABEL = "General services"
+_MAX_SERVICE_TYPE_LENGTH = 80
+
+
+def _service_label(service_type: str) -> str:
+    """Human-readable label for any profession, trade, or service the user typed."""
+    key = (service_type or "").strip()
+    if not key:
+        return _DEFAULT_SERVICE_LABEL
+    if key in _SERVICE_TYPE_LABELS:
+        return _SERVICE_TYPE_LABELS[key]
+    pretty = re.sub(r"[_\-\s]+", " ", key).strip()
+    return pretty[:_MAX_SERVICE_TYPE_LENGTH] or _DEFAULT_SERVICE_LABEL
+
+
+def _normalise_service_type(value: object) -> str:
+    return re.sub(r"[\s_\-]+", " ", str(value or "").strip()).casefold()
 _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 _GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 _OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
@@ -56,7 +76,10 @@ _PHONE = re.compile(r"(?<!\w)(?:\+?\d[\d ()-]{7,}\d)(?!\w)")
 _QUANTITY = re.compile(
     r"\b\d+(?:[.,]\d+)?\s*(?:rooms?|bedrooms?|bathrooms?|toilets?|"
     r"sq\.?\s?ft|sq\.?\s?m|sqm|m²|units?|pieces?|pcs?|hours?|days?|"
-    r"weeks?|months?|workers?)\b",
+    r"weeks?|months?|workers?|lots?|items?|sets?|points?|outlets?|"
+    r"windows?|doors?|apartments?|flats?|offices?|metres?|meters?|"
+    r"km|litres?|liters?|kg|tons?|tonnes?|visits?|sessions?|panels?|"
+    r"storeys?|stories?|floors?|blocks?)\b",
     re.I,
 )
 
@@ -335,14 +358,22 @@ def _proposal_phases(data: dict) -> list[dict]:
 def _build_quotation(
     data: dict,
     *,
-    cleaning_type: str = "residential_deep_cleaning",
+    cleaning_type: str = "",
     job_description: str,
     target_total_ngn: int,
     profile: BusinessProfile,
     client: ClientInfo,
 ) -> tuple[str, list[str], int]:
-    if data.get("service_type") != cleaning_type:
-        raise JobDraftError("The AI draft did not preserve the selected cleaning service type.")
+    service_type = (
+        (cleaning_type or "").strip()[:_MAX_SERVICE_TYPE_LENGTH].strip()
+        or _DEFAULT_SERVICE_TYPE
+    )
+    if (
+        service_type in _SERVICE_TYPE_LABELS
+        and _normalise_service_type(data.get("service_type"))
+        != _normalise_service_type(service_type)
+    ):
+        raise JobDraftError("The AI draft did not preserve the selected service type.")
     title = _clean_line(data.get("title"), field="quotation title", limit=120)
     described_areas = [line for line in job_description.splitlines() if line.strip()]
     minimum_sections = min(len(described_areas), 14) if len(described_areas) >= 4 else 1
@@ -408,7 +439,7 @@ def _build_quotation(
         lines.append(f"Prepared by: {business_name}")
         lines.extend(detail for detail in company_details if detail)
     lines.extend([
-        f"Service type: {_CLEANING_TYPE_LABELS[cleaning_type]}",
+        f"Service type: {_service_label(service_type)}",
         f"Date: {date.today().isoformat()}",
         "",
         "## Project overview",
@@ -611,7 +642,7 @@ def _provider_request(
     model: str,
     api_key: str,
     prompt: str,
-    cleaning_type: str,
+    service_type: str,
 ) -> tuple[str, dict, dict]:
     if provider == "Gemini":
         return (
@@ -622,7 +653,7 @@ def _provider_request(
                 "generationConfig": {
                     "temperature": 0.2,
                     "responseMimeType": "application/json",
-                    "responseSchema": _generation_response_schema(cleaning_type),
+                    "responseSchema": _generation_response_schema(service_type),
                     "maxOutputTokens": 3000,
                 },
             },
@@ -636,7 +667,7 @@ def _provider_request(
                 "name": "cleaning_proposal",
                 "strict": True,
                 "schema": _strict_json_schema(
-                    _generation_response_schema(cleaning_type),
+                    _generation_response_schema(service_type),
                 ),
             },
         }
@@ -675,7 +706,7 @@ def _strict_json_schema(schema: dict) -> dict:
     return converted
 
 
-def _generation_response_schema(cleaning_type: str) -> dict:
+def _generation_response_schema(service_type: str) -> dict:
     text_list = {"type": "ARRAY", "items": {"type": "STRING"}}
     cost_item = {
         "type": "OBJECT",
@@ -690,7 +721,7 @@ def _generation_response_schema(cleaning_type: str) -> dict:
         "properties": {
             "service_type": {
                 "type": "STRING",
-                "enum": [cleaning_type],
+                "enum": [service_type],
             },
             "title": {"type": "STRING"},
             "project_introduction": {"type": "STRING"},
@@ -755,7 +786,7 @@ def _generation_response_schema(cleaning_type: str) -> dict:
 
 async def draft_quotation(
     *,
-    cleaning_type: str = "residential_deep_cleaning",
+    cleaning_type: str = "",
     job_description: str,
     quotation_goal: str,
     target_total_ngn: int,
@@ -774,12 +805,14 @@ async def draft_quotation(
             + (f" {details}" if details else ""),
             status_code=503,
         )
-    if cleaning_type not in _CLEANING_TYPE_LABELS:
-        raise JobDraftError("Select a supported cleaning service type.", status_code=422)
+    service_type = (
+        (cleaning_type or "").strip()[:_MAX_SERVICE_TYPE_LENGTH].strip()
+        or _DEFAULT_SERVICE_TYPE
+    )
 
     source = {
-        "selected_cleaning_type": cleaning_type,
-        "selected_cleaning_type_label": _CLEANING_TYPE_LABELS[cleaning_type],
+        "selected_cleaning_type": service_type,
+        "selected_cleaning_type_label": _service_label(service_type),
         "job_description": job_description.strip(),
         "quotation_goal": quotation_goal.strip(),
         "target_proposal_total_ngn": target_total_ngn,
@@ -787,8 +820,8 @@ async def draft_quotation(
         "business_type": re.sub(r"\s+", " ", profile.business_type).strip()[:120],
         "client_name": re.sub(r"\s+", " ", client.name).strip()[:120],
     }
-    prompt = f"""Act as a professional cleaning-services proposal writer and
-scope analyst. Generate the actual proposal content, not instructions for
+    prompt = f"""Act as a professional proposal writer and scope analyst for any
+trade or industry. Generate the actual proposal content, not instructions for
 another model. Draft a quotation from the following user-provided data:
 {json.dumps(source, ensure_ascii=False)}
 
@@ -815,38 +848,38 @@ similar commentary; state the work itself in clear, natural business language.
 Avoid repetitive introductions, inflated claims, and filler adjectives.
 Do not add rooms, services, measurements, licences, warranties, or conditions
 that are unsupported by either the job brief or the relevant master reference.
-Every room or area in the user's brief must appear as a scope section. For
-each section include an exact source_reference phrase copied from the brief,
-the quantity wording copied exactly or an empty string when none is specified,
-and associated facilities as a separate list. Do not infer that a toilet is
-en-suite when this is unclear; describe the uncertainty in missing_info.
-Give each applicable room/area at least 3 specific, practical tasks, adapted from
-the reference's level of detail and limited to the requested job. Identify and
-preserve room distinctions and ambiguous quantities; list unresolved ambiguity
-in missing_info rather than guessing. Do not treat the target budget as proof of
-market cost or approved company rates.
+Every distinct item, area, or work package in the user's brief must appear as a
+scope section. For each section include an exact source_reference phrase copied
+from the brief, the quantity wording copied exactly or an empty string when none
+is specified, and associated facilities or components as a separate list. Do not
+infer an attribute that the brief leaves unclear; describe the uncertainty in
+missing_info. Give each applicable item or area at least 3 specific, practical
+tasks, adapted from the reference's level of detail and limited to the requested
+job. Identify and preserve item and area distinctions and ambiguous quantities;
+list unresolved ambiguity in missing_info rather than guessing. Do not treat the
+target budget as proof of market cost or approved company rates.
 
-The selected cleaning type in the input is authoritative. Keep the proposal
+The selected service type in the input is authoritative. Keep the proposal
 within that service category even if the free-text objective or job description
 mentions a different service. If they conflict, preserve the selected type and
 add a concise clarification to missing_info; do not silently switch services.
 Adapt terminology, activities, phases, equipment and exclusions to the selected
-type. Residential deep cleaning and regular house cleaning do not imply
-post-construction residue removal, fumigation, pest control, upholstery
-shampooing, appliance deep cleaning, facade work or waste evacuation.
-Include those additional services only when explicitly selected or requested.
-Never claim an inspection, assessment, treatment or work has already occurred.
+service type. Only include adjacent or specialist services (for example residue
+removal, fumigation, pest control, upholstery shampooing, appliance deep
+cleaning, facade work, or waste evacuation) when the selected type or the brief
+explicitly requests them. Include those additional services only when
+explicitly selected or requested. Never claim an inspection, assessment,
+treatment or work has already occurred.
 
 Write a clear project introduction, a numbered scope inventory, and 3-6
 meaningful execution phases, each with a description, practical activities,
 and its own 2-12 item cost breakdown. Use at least 8 and no more than 25 cost
-items across all phases. Avoid charging for the same activity twice. For
-post-construction cleaning, include safe removal of accessible construction
-residue only when the brief requests or clearly describes that service. Include
-fumigation, pest control, or other optional specialist services only when
-explicitly requested. Do not claim that equipment, chemicals, quantities,
-rates, warranties, waste evacuation, or specialist services are confirmed if
-the user did not confirm them; label equipment as proposed for deployment.
+items across all phases. Avoid charging for the same activity twice. Include
+specialist or optional services only when the brief or the selected service
+type explicitly requests them. Do not claim that equipment, materials,
+quantities, rates, warranties, waste removal, or specialist services are
+confirmed if the user did not confirm them; label equipment as proposed for
+deployment.
 Provide at least three specific quality-assurance activities and applicable
 terms only when supported by the user's instructions or reusable master
 reference content. Do not invent payment schedules, validity periods, policies,
@@ -897,7 +930,7 @@ server computes them."""
             async with httpx.AsyncClient(timeout=30.0) as http:
                 for attempt in range(2):
                     url, headers, payload = _provider_request(
-                        provider, model, api_key, prompt, cleaning_type,
+                        provider, model, api_key, prompt, service_type,
                     )
                     response = await http.post(
                         url,
@@ -966,7 +999,7 @@ server computes them."""
             data = _response_text(response, provider=provider)
             quotation_text, missing_info, total = _build_quotation(
                 data,
-                cleaning_type=cleaning_type,
+                cleaning_type=service_type,
                 job_description=job_description,
                 target_total_ngn=target_total_ngn,
                 profile=profile,

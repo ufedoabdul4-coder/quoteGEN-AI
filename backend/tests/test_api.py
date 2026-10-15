@@ -237,15 +237,30 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
-    def test_job_draft_rejects_unknown_cleaning_type(self):
-        response = self.client.post("/job-draft", json={
-            "cleaning_type": "unlisted_service",
-            "job_description": "Three offices",
-            "quotation_goal": "Cleaning",
-            "target_total_ngn": 500000,
-        })
+    def test_job_draft_accepts_free_text_profession(self):
+        # Any trade or profession is accepted, not only the built-in cleaning
+        # categories, so the draft is handed to the AI provider.
+        with (
+            mock.patch.object(
+                main.job_draft, "active_master_reference",
+                return_value="Master proposal reference",
+            ),
+            mock.patch.object(
+                main.job_draft,
+                "draft_quotation",
+                new=mock.AsyncMock(side_effect=main.job_draft.JobDraftError(
+                    "stopped after validation", status_code=503,
+                )),
+            ),
+        ):
+            response = self.client.post("/job-draft", json={
+                "cleaning_type": "Electrical installation",
+                "job_description": "Install wiring and fittings in three offices",
+                "quotation_goal": "Electrical proposal",
+                "target_total_ngn": 500000,
+            })
 
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 503)
 
     def test_job_draft_accepts_unfilled_profile_and_client(self):
         # The browser sends an untouched profile field as null, which must read

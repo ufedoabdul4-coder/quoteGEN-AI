@@ -108,6 +108,7 @@ class JobDraftTests(unittest.TestCase):
     def test_draft_parses_as_a_reconciled_quotation(self):
         quotation, missing, total = _build_quotation(
             self.data,
+            cleaning_type="residential_deep_cleaning",
             job_description="Bedrooms and bathrooms",
             target_total_ngn=800000,
             profile=BusinessProfile(
@@ -229,7 +230,7 @@ class JobDraftTests(unittest.TestCase):
         self.assertEqual(total, 850000)
 
     def test_draft_rejects_service_type_that_differs_from_user_selection(self):
-        with self.assertRaisesRegex(JobDraftError, "selected cleaning service type"):
+        with self.assertRaisesRegex(JobDraftError, "selected service type"):
             _build_quotation(
                 {**self.data, "service_type": "post_construction_cleaning"},
                 cleaning_type="residential_deep_cleaning",
@@ -459,17 +460,18 @@ class JobDraftTests(unittest.TestCase):
         self.assertIn('"safety_considerations"', captured_prompts[0])
         self.assertIn('"assumptions_exclusions"', captured_prompts[0])
         self.assertIn("each with a description, practical activities", captured_prompts[0])
-        self.assertIn('"selected_cleaning_type": "residential_deep_cleaning"', captured_prompts[0])
-        self.assertIn("The selected cleaning type in the input is authoritative", captured_prompts[0])
-        self.assertIn("Residential deep cleaning and regular house cleaning do not imply", captured_prompts[0])
-        self.assertIn("Include those additional services only when explicitly selected or requested.", captured_prompts[0])
+        self.assertIn('"selected_cleaning_type": "general_services"', captured_prompts[0])
+        self.assertIn("The selected service type in the input is authoritative", captured_prompts[0])
+        self.assertIn("Only include adjacent or specialist services", captured_prompts[0])
+        self.assertIn("Include those additional services only when", captured_prompts[0])
+        self.assertIn("explicitly selected or requested.", captured_prompts[0])
         self.assertIn("Match the master proposal's professional voice", captured_prompts[0])
         self.assertIn("Do not narrate the prompt or say", captured_prompts[0])
         self.assertIn("the client requires", captured_prompts[0])
         self.assertIn("800000", captured_prompts[0])
         self.assertEqual(
             captured_schemas[0]["properties"]["service_type"]["enum"],
-            ["residential_deep_cleaning"],
+            ["general_services"],
         )
         self.assertEqual(result["suggested_total_ngn"], 800000)
 

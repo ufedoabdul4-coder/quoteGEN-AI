@@ -3,7 +3,7 @@ import {
   Sparkles, LoaderCircle, Download, ScanText, Pencil, X, Check,
 } from 'lucide-react';
 import type {
-  BusinessProfile, CleaningServiceType, ClientInfo, DocumentRecord, GenerateRequest, TemplateMeta,
+  BusinessProfile, ServiceType, ClientInfo, DocumentRecord, GenerateRequest, TemplateMeta,
   SemanticBlock, Understanding,
 } from '../types';
 import {
@@ -12,7 +12,7 @@ import {
 import { PreviewPane } from './PreviewPane';
 import { BlockEditor } from './BlockEditor';
 import { PlanBenefits } from './PlanBenefits';
-import { CLEANING_SERVICES, isCleaningServiceType } from '../utils/cleaning';
+import { SERVICE_SUGGESTIONS } from '../utils/services';
 import { useAuth } from '../services/auth';
 
 const SAMPLE = `Quotation for Acme Facilities Ltd
@@ -51,7 +51,7 @@ function buildPayload(
   documentId?: string | null, inputKind: 'paste' | 'job' = 'paste',
   jobMissingInfo: string[] = [],
   jobDescription = '',
-  cleaningType: CleaningServiceType | null = null,
+  cleaningType: ServiceType | null = null,
   quotationGoal = '',
 ): GenerateRequest {
   return {
@@ -83,8 +83,8 @@ export function CreateQuotation({
     initialDocument?.input_kind === 'job',
   );
   const [jobDescription, setJobDescription] = useState(initialDocument?.job_description || '');
-  const [cleaningType, setCleaningType] = useState<CleaningServiceType>(
-    initialDocument?.cleaning_type || 'residential_deep_cleaning',
+  const [cleaningType, setCleaningType] = useState<ServiceType>(
+    initialDocument?.cleaning_type || '',
   );
   const [quotationGoal, setQuotationGoal] = useState(initialDocument?.quotation_goal || '');
   const [targetTotalNgn, setTargetTotalNgn] = useState(() => {
@@ -416,24 +416,25 @@ export function CreateQuotation({
           ) : inputMode === 'job' ? (
             <div className="space-y-3">
               <div>
-                <label htmlFor="cleaning-type" className="label">Cleaning service type</label>
-                <select
-                  id="cleaning-type"
-                  className="select"
+                <label htmlFor="service-type" className="label">Service or profession</label>
+                <input
+                  id="service-type"
+                  className="input"
+                  list="service-type-suggestions"
                   value={cleaningType}
-                  onChange={(event) => {
-                    if (isCleaningServiceType(event.target.value)) {
-                      setCleaningType(event.target.value);
-                    }
-                  }}
+                  onChange={(event) => setCleaningType(event.target.value)}
+                  placeholder="e.g. Electrical installation, Plumbing, Cleaning"
+                  maxLength={80}
+                  autoComplete="off"
                   disabled={Boolean(busy)}
-                >
-                  {CLEANING_SERVICES.map((service) => (
-                    <option key={service.value} value={service.value}>{service.label}</option>
+                />
+                <datalist id="service-type-suggestions">
+                  {SERVICE_SUGGESTIONS.map((service) => (
+                    <option key={service} value={service} />
                   ))}
-                </select>
+                </datalist>
                 <p className="mt-1 text-xs text-[var(--text-muted)]">
-                  This selection guides the scope and keeps unrelated services out of the proposal.
+                  Type your trade or service. This guides the scope for any profession.
                 </p>
               </div>
               <div>
@@ -443,7 +444,7 @@ export function CreateQuotation({
                   className="textarea"
                   value={jobDescription}
                   onChange={(e) => setJobDescription(e.target.value)}
-                  placeholder={'Describe the rooms, areas, quantities, and work required…\n\nFor example: 3 bedrooms with toilets, sitting room, guest room with toilet, open kitchen, dining room, family lounge with balcony, and BQ.'}
+                  placeholder={'Describe the work, areas, items, quantities, and requirements…\n\nFor example: 3 bedrooms with toilets, kitchen, and BQ — or: supply and install 12 LED fittings across 3 offices.'}
                   maxLength={10000}
                   style={{ minHeight: 190 }}
                   disabled={Boolean(busy)}
